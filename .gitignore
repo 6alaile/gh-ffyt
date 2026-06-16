@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Node
+node_modules/
+.npm/
+.eslintcache
+
+# HyperFrames render outputs
+world_cup_video_01*.mp4
+world_cup_video_01*.mov
+dist/
+out/
+*.log
+
+# Pipeline intermediates (Pillow cards, ffmpeg scaled clips, concat lists)
+*_raw.mp4
+*_scaled.mp4
+*_overlay.png
+*_card.png
+video_01_assets/
+concat_list.txt
+audio_concat.txt
+
+# YouTube credentials (NEVER commit)
+client_secrets.json
+youtube_token.pickle
+*_token.pickle
+*_client_secrets.json
+yt-temp-*/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+*.tsbuildinfo
+.cache/
