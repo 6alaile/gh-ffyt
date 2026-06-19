@@ -300,7 +300,13 @@ def main(argv: list[str] | None = None) -> int:
         if not clip_path.exists():
             url = fetch_clip(scene)
             if not url:
-                print(f"  ! no clip for {scene['id']} — skipping (will produce no-video scene)")
+                query = scene.get("query") or scene["id"]
+                src = scene.get("source", "pixabay")
+                print(
+                    f"  ! no clip for {scene['id']} "
+                    f"(source={src}, query={query!r}, min_width={scene.get('min_width', 1280)}) — "
+                    f"scene will render without background footage"
+                )
                 continue
             raw = clips_dir / f"{scene['id']}_raw.mp4"
             if not download_file(url, raw, label=scene["id"]):
@@ -309,6 +315,27 @@ def main(argv: list[str] | None = None) -> int:
             raw.unlink(missing_ok=True)
         else:
             print(f"  [skip] clip {scene['id']}.mp4 exists")
+
+    # 2b. Sanity-check: every scene that made it into the render queue
+    # must have a clip on disk. HyperFrames' skip-guard only checks the
+    # render MP4 (compose.py:348), so a missing clip can ride through
+    # a previous run and surface as the misleading
+    # `missing_local_asset` warning at render time. Verify inputs here
+    # so the next run can fail loud and tell the user which scene to
+    # re-investigate, instead of silently producing a no-video MP4.
+    missing_clips = [
+        s["id"] for s in spec["scenes"]
+        if not (clips_dir / f"{s['id']}.mp4").exists()
+    ]
+    if missing_clips:
+        print(
+            f"  ! {len(missing_clips)} scene(s) have no clip on disk: "
+            f"{', '.join(missing_clips)}"
+        )
+        print(
+            "    These will render with `missing_local_asset` warnings and "
+            "missing visuals until footage is re-fetched."
+        )
 
     # 3. Voiceover.
     # Edge TTS is the default (free, no key). If TTS_ALLOW_ELEVENLABS=1

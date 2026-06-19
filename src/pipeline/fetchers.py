@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import requests
+from requests.exceptions import HTTPError, RequestException
 
 from pipeline.config import FootageKeys
 
@@ -48,11 +49,19 @@ def fetch_pixabay_clip(scene: dict[str, Any]) -> Optional[str]:
             timeout=15,
         )
         r.raise_for_status()
-    except Exception as e:
-        print(f"  ! pixabay search failed for {scene['id']}: {e}")
+    except HTTPError as e:
+        print(f"  ! pixabay HTTP {e.response.status_code} for {scene['id']}: {e}")
+        return None
+    except RequestException as e:
+        print(f"  ! pixabay request failed for {scene['id']}: {e}")
         return None
 
-    for hit in r.json().get("hits", []):
+    hits = r.json().get("hits", [])
+    if not hits:
+        print(f"  ! pixabay returned 0 hits for {scene['id']} (query={query!r}, min_width={min_w})")
+        return None
+
+    for hit in hits:
         for v in hit.get("videos", {}).values():
             if not isinstance(v, dict):
                 continue
@@ -62,6 +71,7 @@ def fetch_pixabay_clip(scene: dict[str, Any]) -> Optional[str]:
                 continue
             if min_w <= w <= 1920:
                 return url
+    print(f"  ! pixabay returned {len(hits)} hit(s) for {scene['id']} but none matched min_width={min_w}..1920")
     return None
 
 
