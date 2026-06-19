@@ -1,0 +1,209 @@
+name: Render Video
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: "Spec file to render (edit this list when adding a new spec)"
+        type: choice
+        required: true
+        default: "specs/world_cup_2026.json"
+        options:
+          - specs/world_cup_2026.json
+      skip_upload:
+        description: "Skip YouTube upload (render only)"
+        type: boolean
+        default: false
+      privacy_status:
+        description: "YouTube privacy (overrides YT_PRIVACY_STATUS secret and spec)"
+        type: choice
+        required: false
+        default: ""
+        options:
+          - public
+          - unlisted
+          - private
+          - ""
+
+# Concurrency limit so a tag+push combo doesn't run twice in parallel.
+concurrency:
+  group: render-and-upload-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    name: Render and upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve spec
+        id: spec
+        run: |
+          # Default: world_cup_2026 (the legacy single-spec default).
+          # On workflow_dispatch: use the chosen spec.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SPEC_PATH="${{ inputs.spec }}"
+          else
+            SPEC_PATH="specs/world_cup_2026.json"
+          fi
+          if [ ! -f "$SPEC_PATH" ]; then
+            echo "ERROR: spec file not found: $SPEC_PATH"
+            exit 1
+          fi
+          echo "spec=$SPEC_PATH" >> "$GITHUB_OUTPUT"
+          # Read the spec id for naming the artifact.
+          SPEC_ID=$(jq -r '.id' "$SPEC_PATH")
+          echo "spec_id=$SPEC_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # HyperFrames v0.6.103+ requires Node >= 22. The runner's
+          # default is 20, so we pin to 22 explicitly.
+          node-version: '>=22'
+          cache: 'npm'
+
+      - name: Install ffmpeg and system fonts
+        id: install-chrome
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu fonts-liberation jq
+          # HyperFrames' perf-optimized capture path needs chrome-headless-shell
+          # (HeadlessExperimental.beginFrame). Without it, falls back to screenshot
+          # mode in regular Chrome, which is ~6-8× slower per frame.
+          #
+          # @puppeteer/browsers' default install location has changed between
+          # releases — on some runners it lands in ~/.cache/puppeteer/, on
+          # others in the workspace CWD. We capture the install CLI's own
+          # reported path (last line of stdout) and use it; fall back to a
+          # recursive find if parsing fails.
+          INSTALL_OUT=$(npx --yes @puppeteer/browsers install chrome-headless-shell@stable 2>&1)
+          echo "$INSTALL_OUT" | tail -5
+          # The install CLI's final line looks like:
+          #   chrome-headless-shell@VER /abs/path/to/chrome-headless-shell
+          CHS_BIN=$(echo "$INSTALL_OUT" | awk '/chrome-headless-shell@[0-9]/ {print $NF}' | tail -1)
+          if [ ! -x "$CHS_BIN" ]; then
+            CHS_BIN=$(find / -type f -name chrome-headless-shell -path '*chrome-headless-shell-linux64*' -print -quit 2>/dev/null)
+          fi
+          if [ ! -x "$CHS_BIN" ]; then
+            echo "ERROR: chrome-headless-shell binary not found or not executable"
+            find / -type d -name 'chrome-headless-shell*' 2>/dev/null | head -10 || true
+            exit 1
+          fi
+          echo "Resolved chrome-headless-shell: $CHS_BIN"
+          echo "HYPERFRAMES_BROWSER_PATH=$CHS_BIN" >> "$GITHUB_ENV"
+
+      - name: Install md2yt (with dev extras for tests)
+        run: pip install ".[dev]"
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Cache HyperFrames (fonts + Chrome)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/hyperframes
+          key: hf-cache-v3-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'src/pipeline/**/*.py', 'src/pipeline/resources/**/*') }}
+          restore-keys: |
+            hf-cache-v3-${{ runner.os }}-
+
+      - name: Show memory headroom
+        run: |
+          echo "Memory:"; free -h
+          echo "Disk:"; df -h /
+
+      - name: Render video
+        env:
+          PIXABAY_API_KEY:       ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY:        ${{ secrets.PEXELS_API_KEY }}
+          ELEVENLABS_API_KEY:    ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_VOICE_ID:   ${{ secrets.ELEVENLABS_VOICE_ID }}
+          # Render scenes in parallel; each npx hyperframes render is its
+          # own Chrome process. 2 is safe on 7GB runners; bump on larger
+          # boxes.
+          RENDER_PARALLEL: "2"
+          # Edge TTS is the default. Set TTS_ALLOW_ELEVENLABS=1 to
+          # enable ElevenLabs as a fallback when edge-tts fails.
+          # TTS_ALLOW_ELEVENLABS: "1"
+          # EDGE_TTS_VOICE: ${{ secrets.EDGE_TTS_VOICE }}   # uncomment to override
+        run: |
+          # Assert chrome-headless-shell is wired up. If HYPERFRAMES_BROWSER_PATH
+          # is empty here, the install step's glob missed and we're about to
+          # fall back to system Chrome in screenshot mode (~6-8× slower).
+          if [ -z "$HYPERFRAMES_BROWSER_PATH" ] || [ ! -x "$HYPERFRAMES_BROWSER_PATH" ]; then
+            echo "ERROR: HYPERFRAMES_BROWSER_PATH is not set or binary missing"
+            echo "  HYPERFRAMES_BROWSER_PATH='$HYPERFRAMES_BROWSER_PATH'"
+            find / -type f -name chrome-headless-shell -path '*chrome-headless-shell-linux64*' 2>/dev/null | head -5 || true
+            exit 1
+          fi
+          echo "HyperFrames browser: $HYPERFRAMES_BROWSER_PATH"
+          mkdir -p build
+          md2yt compose \
+            --spec "${{ steps.spec.outputs.spec }}" \
+            --output-dir build \
+            --quality high
+        timeout-minutes: 60
+
+      - name: Verify render output
+        run: |
+          FINAL="build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4"
+          test -f "$FINAL" || (echo "ERROR: $FINAL not found"; ls -R build || true; exit 1)
+          ls -lh "$FINAL"
+          ffprobe -v error -show_entries \
+            stream=codec_name,width,height,r_frame_rate,duration \
+            -of default=noprint_wrappers=1 \
+            "$FINAL"
+
+      - name: Upload render artifact (push)
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.spec.outputs.spec_id }}-${{ github.sha }}
+          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          retention-days: 90
+
+      - name: Upload render artifact (release tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.spec.outputs.spec_id }}-${{ github.ref_name }}
+          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          retention-days: 365
+
+      - name: Upload render artifact (PR preview)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.spec.outputs.spec_id }}-pr-${{ github.event.pull_request.number }}
+          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          retention-days: 14
+
+      - name: Upload to YouTube
+        if: |
+          github.event_name != 'pull_request' &&
+          (github.event_name != 'workflow_dispatch' || !inputs.skip_upload)
+        env:
+          YT_CLIENT_SECRETS_BASE64: ${{ secrets.YT_CLIENT_SECRETS_BASE64 }}
+          YT_TOKEN_PICKLE_BASE64:   ${{ secrets.YT_TOKEN_PICKLE_BASE64 }}
+          YT_PRIVACY_STATUS:        ${{ github.event.inputs.privacy_status || secrets.YT_PRIVACY_STATUS }}
+          YT_THUMBNAIL_PATH:        ${{ secrets.YT_THUMBNAIL_PATH }}
+          YT_CAPTIONS_PATH:         ${{ secrets.YT_CAPTIONS_PATH }}
+          YT_SPEC_PATH:             ${{ steps.spec.outputs.spec }}
+          VIDEO_FILE:               build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+        run: md2yt upload
+        timeout-minutes: 30
