@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pipeline"
+dynamic = ["version"]
+description = "MD2YT — Markdown-to-YouTube faceless video factory."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "UNLICENSED" }
+authors = [{ name = "MD2YT" }]
+keywords = ["video", "faceless", "ffmpeg", "youtube", "tts", "hyperframes"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "requests>=2.31",
+    "tqdm>=4.66",
+    "Pillow>=10.0",
+    # ElevenLabs is dormant: edge-tts is the default TTS provider. To
+    # re-enable, install the optional `elevenlabs` extra and set
+    # TTS_ALLOW_ELEVENLABS=1 in the workflow env.
+    "google-auth>=2.27",
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.120",
+    # Edge TTS — default TTS, free, no API key required.
+    "edge-tts>=6.1",
+]
+
+[project.optional-dependencies]
+elevenlabs = ["elevenlabs>=0.2.0"]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+
+[project.scripts]
+md2yt = "pipeline.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/USER/MD2YT"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pipeline*"]
+
+[tool.setuptools.package-data]
+pipeline = [
+    "resources/*.html",
+    "resources/fonts/*.woff2",
+    "py.typed",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "pipeline.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
