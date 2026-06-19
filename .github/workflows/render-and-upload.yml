@@ -193,10 +193,23 @@ jobs:
           path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
           retention-days: 14
 
+      - name: Upload render artifact (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.spec.outputs.spec_id }}-manual-${{ github.run_id }}
+          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          retention-days: 30
+
       - name: Upload to YouTube
         if: |
           github.event_name != 'pull_request' &&
           (github.event_name != 'workflow_dispatch' || !inputs.skip_upload)
+        # The MP4 artifact is the primary deliverable; never let a
+        # missing-secrets failure (client_secrets.json / youtube_token.pickle)
+        # take down the whole run. The user can still grab the artifact
+        # from the Actions run page even when the YT step no-ops or fails.
+        continue-on-error: true
         env:
           YT_CLIENT_SECRETS_BASE64: ${{ secrets.YT_CLIENT_SECRETS_BASE64 }}
           YT_TOKEN_PICKLE_BASE64:   ${{ secrets.YT_TOKEN_PICKLE_BASE64 }}
