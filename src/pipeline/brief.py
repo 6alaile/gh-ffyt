@@ -7,9 +7,12 @@ author to complete.
 
 Documented input schema (anything not in this list is ignored):
 
-  # <Title>                              ──► spec.youtube.title (fallback)
+  # <Title>                              ──► spec.youtube.title (fallback) +
+                                            spec._source_heading + spec._source_description
   ## Hook                                ──► scene 1 of kind "hook"
-  ## Scene <N> — <Title>                 ──► scene N
+  ## Hook (First 0–8 seconds)            ──► scene 1 of kind "hook" (prose form)
+  ## Scene <N> — <Title>                 ──► scene N (per-scene bullets)
+  ## Script Outline                      ──► one scene per markdown-table row
   ## YouTube Metadata
     **Title options:**
     1. <title 1>
@@ -23,6 +26,8 @@ Documented input schema (anything not in this list is ignored):
     <ignored — voice/tone metadata only>
   ## Format & Length
     **Target length:** <text>             ──► spec.total_length_hint (informational)
+  ## Production Notes
+    <ignored>
 
 Per-scene block, inside ## Scene / ## Hook:
 
@@ -87,17 +92,43 @@ def parse_brief(text: str) -> dict[str, Any]:
     spec: dict[str, Any] = {"scenes": []}
     top_title = _h1_title(text)
 
+    # Stash the H1 + early-body prose so brief_fill.py can use it for the
+    # YouTube description fallback when the brief has no ## YouTube
+    # Metadata block (e.g. Content_Brief.md after a partial conversion).
+    if top_title:
+        spec["_source_heading"] = top_title
+    spec["_source_description"] = _first_paragraphs(text, max_paragraphs=3)
+
     if "YouTube Metadata" in sections:
         _fill_youtube(spec, sections["YouTube Metadata"], top_title)
 
-    # First scene may be under ## Hook.
-    if "Hook" in sections:
-        scene = _parse_scene_block("Hook", 1, sections["Hook"])
+    # First scene may be under ## Hook (with or without a parenthetical
+    # timing hint like "(First 0–8 seconds)"). The same parser handles
+    # both the bullet form (`**Kind:**` etc.) and the prose form
+    # (`**Hook line:** "..."`).
+    if "Hook" in sections or _first_matching_section(sections, r"^hook\b") is not None:
+        hook_name, hook_body = _first_hook_section(sections)
+        # Always run the bullet-schema parser first so duration / kind /
+        # headline are captured. Then layer the prose parser on top — if
+        # it finds a **Hook line:** or blockquote script, that wins.
+        scene = _parse_bullet_scene_block(hook_name, 1, hook_body)
+        prose_scene = _parse_hook_section_body(hook_name, 1, hook_body)
+        if prose_scene.get("script"):
+            scene["script"] = prose_scene["script"]
         if scene.get("kind") is None:
             scene["kind"] = "hook"
         spec["scenes"].append(scene)
+        spec.setdefault("_source_hook_heading", hook_name)
 
-    # Remaining scenes under ## Scene N — Title.
+    # Optional ## Script Outline: a markdown table whose rows become scenes.
+    if "Script Outline" in sections:
+        scenes = parse_outline_table(sections["Script Outline"])
+        for i, s in enumerate(scenes, start=len(spec["scenes"]) + 1):
+            s.setdefault("id", f"{i:02d}_outline_{i:02d}")
+            spec["scenes"].append(s)
+
+    # Remaining scenes under ## Scene N — Title (or ## Scene N: Title, or
+    # the em/en-dash variant).
     scene_n = len(spec["scenes"]) + 1
     for name, body in sections.items():
         if not re.match(r"^Scene\b", name):
@@ -182,10 +213,234 @@ def _fill_youtube(spec: dict, body: str, top_title: str | None) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Per-scene parser
+# Prose-style hook section parser
+#
+# A "## Hook" section in Content_Brief.md-style briefs uses prose,
+# not the **Kind:** / **Duration:** bullets the structured parser
+# expects. Extract the hook line and use it as the script.
+# ─────────────────────────────────────────────────────────────────────
+def _parse_hook_section_body(name: str, idx: int, body: str) -> dict[str, Any]:
+    """Parse a prose-style hook section (e.g. ## Hook (First 0–8 seconds)).
+
+    Recognises **Hook line:** "<text>" or **Opening line:** "<text>".
+    Falls back to the first quoted block in the body.
+    """
+    scene_id = _scene_id(name, idx)
+    scene: dict[str, Any] = {"id": scene_id, "kind": "hook"}
+
+    # **Hook line:** "<text>" — may span multiple lines.
+    m = re.search(r"\*\*(?:Hook line|Opening line|Opening visual):\*\*\s*(.+?)(?=\n\n|\n\*\*|\Z)", body, re.DOTALL)
+    if m:
+        raw = m.group(1).strip()
+        # Strip surrounding quotes if present.
+        if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+            raw = raw[1:-1]
+        scene["script"] = raw
+        return scene
+
+    # Fallback: first blockquote in the body.
+    qb = re.search(r"^>\s*\"?(.+?)\"?\s*$", body, re.MULTILINE)
+    if qb:
+        scene["script"] = qb.group(1).strip()
+        return scene
+
+    return scene
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Per-scene parser (bullet-list form)
+# ─────────────────────────────────────────────────────────────────────
+# Per-scene parser (bullet-list form)
 # ─────────────────────────────────────────────────────────────────────
 def _parse_scene_block(name: str, idx: int, body: str) -> dict[str, Any]:
-    """Extract a scene dict from a ## section body."""
+    """Extract a scene dict from a ## section body.
+
+    Hook-named sections route through _parse_hook_section_body, which
+    handles prose-style briefs. Other sections keep their bullet-list
+    schema.
+    """
+    if re.match(r"^hook\b", name, flags=re.IGNORECASE):
+        return _parse_hook_section_body(name, idx, body)
+    return _parse_bullet_scene_block(name, idx, body)
+
+
+def _first_hook_section(sections: dict[str, str]) -> tuple[str, str]:
+    """Return (name, body) of the first hook-like section.
+
+    Accepts `Hook`, `Hook (First 0–8 seconds)`, `Hook — The Premise`, etc.
+    Falls back to ("Hook", "") when nothing matches.
+    """
+    for name in sections:
+        if re.match(r"^hook\b", name, flags=re.IGNORECASE):
+            return name, sections[name]
+    return "Hook", sections.get("Hook", "")
+
+
+def _first_matching_section(sections: dict[str, str], pattern: str):
+    """Return the section name matching `pattern`, or None. Pattern is
+    matched against section names with re.match."""
+    for name in sections:
+        if re.match(pattern, name, flags=re.IGNORECASE):
+            return name
+    return None
+
+
+def _first_paragraphs(text: str, max_paragraphs: int = 3) -> str:
+    """Return the first N non-empty paragraphs after the H1, joined."""
+    lines = text.splitlines()
+    # Skip H1 line(s).
+    body_lines: list[str] = []
+    for line in lines:
+        if line.startswith("# "):
+            continue
+        body_lines.append(line)
+    # Split into paragraphs on blank lines.
+    paragraphs: list[str] = []
+    buf: list[str] = []
+    for line in body_lines:
+        if line.strip() == "":
+            if buf:
+                joined = " ".join(buf).strip()
+                if joined and not joined.startswith("#"):
+                    paragraphs.append(joined)
+                buf = []
+            if len(paragraphs) >= max_paragraphs:
+                break
+        else:
+            buf.append(line)
+    if buf and len(paragraphs) < max_paragraphs:
+        joined = " ".join(buf).strip()
+        if joined and not joined.startswith("#"):
+            paragraphs.append(joined)
+    return "\n\n".join(paragraphs[:max_paragraphs])
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Outline-table parser
+#
+# A "## Script Outline" section with a markdown table whose columns
+# cover Duration / Voiceover / Visual / Scene Title. Each row becomes
+# a scene; per-row fields are merged into the auto-fill heading for
+# downstream inference.
+# ─────────────────────────────────────────────────────────────────────
+_OUTLINE_DURATION_RE = re.compile(r"(\d+):(\d+)\s*[–\-—]\s*(\d+):(\d+)")
+_OUTLINE_DURATION_SIMPLE_RE = re.compile(r"(\d+)\s*[–\-—]\s*(\d+)\s*s?", re.IGNORECASE)
+
+
+def parse_outline_table(body: str) -> list[dict[str, Any]]:
+    """Parse a markdown table in `body` into a list of scene dicts.
+
+    Expected columns (header row is matched case-insensitively):
+      # / Scene / Scene Title    -> scene id + heading source
+      Duration / Time            -> duration_s (computed from end - start)
+      Voiceover / Script         -> scene.script
+      Visual / Visual Direction  -> scene.query
+
+    All other columns are ignored. Returns one scene per body row.
+    Skips the header row, the separator row (`|---|---|`), and any row
+    whose first cell is empty (continuation rows).
+    """
+    # Find a block of consecutive lines that contain a `|` character —
+    # that's the table. The first such line is the header.
+    lines = [l for l in body.splitlines() if l.strip()]
+    table_lines = [l for l in lines if "|" in l]
+    if len(table_lines) < 3:
+        return []
+
+    header = _split_md_row(table_lines[0])
+    if not header:
+        return []
+    cols = [_norm(c) for c in header]
+
+    def col(*names: str) -> int | None:
+        for n in names:
+            for i, c in enumerate(cols):
+                if c == _norm(n):
+                    return i
+        return None
+
+    idx_title  = col("scene title", "scene", "#")
+    idx_dur    = col("duration", "time")
+    idx_script = col("voiceover", "voiceover / on-screen text", "script", "on-screen text")
+    idx_visual = col("visual", "visual direction", "notes")
+    if idx_title is None:
+        # Last-ditch: first column.
+        idx_title = 0
+
+    scenes: list[dict[str, Any]] = []
+    # Skip header (0) and separator (1).
+    for line in table_lines[2:]:
+        cells = _split_md_row(line)
+        if not cells or all(not c.strip() for c in cells):
+            continue
+        if len(cells) <= idx_title:
+            continue
+
+        raw_title = cells[idx_title].strip()
+        if not raw_title:
+            continue
+
+        sid = _slugify(raw_title)
+        scene: dict[str, Any] = {"id": sid}
+
+        # Duration: support "0:08-0:45", "8-45s", "8–22s".
+        if idx_dur is not None and idx_dur < len(cells):
+            dur_text = cells[idx_dur].strip()
+            scene["duration_s"] = _parse_duration_seconds(dur_text) or 10
+        else:
+            scene["duration_s"] = 10
+
+        if idx_script is not None and idx_script < len(cells):
+            scene["script"] = cells[idx_script].strip()
+        if idx_visual is not None and idx_visual < len(cells):
+            scene["query"] = cells[idx_visual].strip()
+
+        scenes.append(scene)
+
+    return scenes
+
+
+def _split_md_row(line: str) -> list[str]:
+    """Split a markdown table row on `|` and trim each cell.
+
+    A leading/trailing `|` are stripped (GFM style). Empty cells are kept
+    as empty strings.
+    """
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+
+def _parse_duration_seconds(text: str) -> int | None:
+    """Parse '0:08-0:45', '8-22s', '45s', '8s' → integer seconds."""
+    text = text.strip()
+    m = _OUTLINE_DURATION_RE.search(text)
+    if m:
+        m1, s1, m2, s2 = (int(x) for x in m.groups())
+        end = m2 * 60 + s2
+        start = m1 * 60 + s1
+        return max(1, end - start)
+    m = _OUTLINE_DURATION_SIMPLE_RE.search(text)
+    if m:
+        start, end = (int(x) for x in m.groups())
+        return max(1, end - start)
+    m = re.match(r"^(\d+)\s*s?$", text, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _parse_bullet_scene_block(name: str, idx: int, body: str) -> dict[str, Any]:
+    """Extract a scene dict from a ## section body using the bullet
+    schema (**Kind:**, **Duration:**, **Headline:**, **Stats:**, etc.).
+    """
     scene_id = _scene_id(name, idx)
     scene: dict[str, Any] = {"id": scene_id}
 

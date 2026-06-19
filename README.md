@@ -185,6 +185,47 @@ unambiguously. Everything else is left as `TODO` for you to fill in.
 
 ---
 
+## From markdown to video in one command
+
+`md2yt from-brief` chains the parse → auto-fill → validate → render →
+(optional) upload pipeline so a single brief produces a finished MP4:
+
+```bash
+md2yt from-brief --input Content_Brief.md --output-dir build
+# Final: build/<spec.id>/<spec.id>.mp4
+```
+
+What happens under the hood:
+
+1. **Parse** the `.md` — recognises `## Hook`, `## Scene N — Title`,
+   `## Script Outline` (markdown table), and `## YouTube Metadata`.
+2. **Auto-fill** the `TODO` fields with sensible defaults (kind from
+   heading keywords, duration_s, voiceover script, headline, eyebrow,
+   stats/items/names/cards, YouTube title/description/tags/category).
+   The CLI prints a `Fill report` listing every inferred value so you
+   can audit before render.
+3. **Validate** the filled spec against `pipeline.schema`.
+4. **Compose** — fetch → re-encode → TTS → HTML → render → xfade,
+   exactly like `md2yt compose`.
+5. **Upload** (only with `--upload`): `md2yt upload` against the rendered
+   MP4 and the filled spec. Requires YouTube secrets wired (see
+   `YOUTUBE_SETUP.md`).
+
+Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `--no-render` | Parse + fill + validate + write the spec to disk; skip compose. Use this to inspect what the auto-filler produced. |
+| `--spec-out <path>` | Where to write the filled spec. Default: `build/<id>/spec.json`. |
+| `--upload` | Run `md2yt upload` after compose succeeds. |
+| `--quality low` | Render at lower quality to iterate faster. |
+
+The auto-filler is best-effort. If you care about specific copy,
+`--no-render` and hand-edit the produced `spec.json` before running
+`md2yt compose` against it.
+
+---
+
 ## GitHub Actions
 
 | Event | What happens |

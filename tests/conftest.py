@@ -34,5 +34,10 @@ def example_brief_path(repo_root: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def content_brief_path(repo_root: Path) -> Path:
+    return repo_root / "Content_Brief.md"
+
+
+@pytest.fixture(scope="session")
 def fixtures_dir(repo_root: Path) -> Path:
     return repo_root / "tests" / "fixtures"

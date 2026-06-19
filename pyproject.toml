@@ -33,8 +33,10 @@ dependencies = [
     "google-auth>=2.27",
     "google-auth-oauthlib>=1.2",
     "google-api-python-client>=2.120",
-    # Edge TTS — default TTS, free, no API key required.
+    # Edge TTS - default TTS, free, no API key required.
     "edge-tts>=6.1",
+    # Web UI - local single-user host. md2yt-ui command.
+    "Flask>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +48,7 @@ dev = [
 
 [project.scripts]
 md2yt = "pipeline.cli:main"
+md2yt-ui = "pipeline.ui:main"
 
 [project.urls]
 Homepage = "https://github.com/USER/MD2YT"
@@ -62,6 +65,8 @@ pipeline = [
     "resources/*.html",
     "resources/fonts/*.woff2",
     "py.typed",
+    "md2yt_ui/templates/*.html",
+    "md2yt_ui/static/*",
 ]
 
 [tool.setuptools.dynamic]
