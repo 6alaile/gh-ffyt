@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     # Run renders in parallel. Each npx hyperframes render is a single
     # Chrome-driven capture process, so concurrent renders scale near-
     # linearly up to the CI runner's headroom. Default `RenderConfig`
-    # is 2 — low-memory CI runners thrash at higher concurrency.
+    # is 3 — bump on larger runners, lower on 7 GB boxes.
     rendered_any = False
     render_jobs: list[tuple[Path, Path]] = []
     for i, scene in enumerate(spec["scenes"], 1):

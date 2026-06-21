@@ -51,7 +51,7 @@ def test_tts_config_allow_elevenlabs_only_on_exact_one(monkeypatch: pytest.Monke
 def test_render_config_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RENDER_PARALLEL", raising=False)
     cfg = RenderConfig.from_env()
-    assert cfg.parallel == 2
+    assert cfg.parallel == 3
 
 
 def test_render_config_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,7 +66,7 @@ def test_render_config_clamps_to_minimum_one(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_render_config_falls_back_on_junk(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RENDER_PARALLEL", "not-a-number")
-    assert RenderConfig.from_env().parallel == 2
+    assert RenderConfig.from_env().parallel == 3
 
 
 def test_footage_keys_default_none(monkeypatch: pytest.MonkeyPatch) -> None:

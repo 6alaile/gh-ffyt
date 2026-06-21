@@ -118,9 +118,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/hyperframes
-          key: hf-cache-v3-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'src/pipeline/**/*.py', 'src/pipeline/resources/**/*') }}
+          key: hf-cache-v4-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'package-lock.json', 'src/pipeline/**/*.py', 'src/pipeline/resources/**/*') }}
           restore-keys: |
-            hf-cache-v3-${{ runner.os }}-
+            hf-cache-v4-${{ runner.os }}-
 
       - name: Show memory headroom
         run: |
@@ -136,7 +136,7 @@ jobs:
           # Render scenes in parallel; each npx hyperframes render is its
           # own Chrome process. 2 is safe on 7GB runners; bump on larger
           # boxes.
-          RENDER_PARALLEL: "2"
+          RENDER_PARALLEL: "3"
           # Edge TTS is the default. Set TTS_ALLOW_ELEVENLABS=1 to
           # enable ElevenLabs as a fallback when edge-tts fails.
           # TTS_ALLOW_ELEVENLABS: "1"

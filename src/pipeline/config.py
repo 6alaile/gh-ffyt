@@ -89,9 +89,9 @@ class RenderConfig:
     @classmethod
     def from_env(cls) -> "RenderConfig":
         try:
-            parallel = int(_env("RENDER_PARALLEL") or "2")
+            parallel = int(_env("RENDER_PARALLEL") or "3")
         except ValueError:
-            parallel = 2
+            parallel = 3
         return cls(parallel=max(1, parallel))
 
 

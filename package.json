@@ -1,0 +1,9 @@
+{
+  "name": "md2yt-renderer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MD2YT — HyperFrames is invoked via `npx hyperframes@<version>` from CI; this package.json exists so npm and HyperFrames caches have a stable lockfile key.",
+  "scripts": {
+    "render": "npx --yes hyperframes@0.6.103 render"
+  }
+}
