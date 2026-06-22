@@ -2,10 +2,10 @@ name: Render Video
 
 on:
   push:
-    branches: [main]
+    branches: [split]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [split]
   workflow_dispatch:
     inputs:
       upload_id:
