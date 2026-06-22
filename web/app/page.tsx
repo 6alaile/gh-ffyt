@@ -80,7 +80,9 @@ export default function HomePage() {
 
   async function onRender() {
     if (status.phase !== "uploaded") return;
-    setStatus({ phase: "dispatching", upload: status.upload });
+    // Placeholder actionsUrl until the server resolves the run id.
+    const placeholderActionsUrl = `https://github.com/`;
+    setStatus({ phase: "dispatching", upload: status.upload, actionsUrl: placeholderActionsUrl });
 
     const r = await fetch("/api/render", {
       method: "POST",
@@ -96,10 +98,14 @@ export default function HomePage() {
     if (typeof runId === "number") {
       setStatus({ phase: "running", upload: status.upload, runId, actionsUrl });
     } else {
-      // dispatchPending=true: server hasn't located the run yet. Send
-      // the user to the workflow's runs list and let the next status
-      // poll reconcile. (Use the repo+workflow URL we already know.)
-      setStatus({ phase: "dispatching", upload: status.upload, actionsUrl });
+      // dispatchPending=true: server hasn't located the run yet. The
+      // placeholder link goes to the workflow's runs list; the next
+      // status poll (which finds the run via run id) reconciles.
+      setStatus({
+        phase: "dispatching",
+        upload: status.upload,
+        actionsUrl: actionsUrl ?? placeholderActionsUrl,
+      });
     }
   }
 
