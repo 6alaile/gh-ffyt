@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  const ref = process.env.GH_REF || "main";
+  const ref = process.env.GH_REF || "split";
 
   try {
     await dispatchWorkflow({
