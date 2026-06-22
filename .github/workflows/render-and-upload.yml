@@ -29,6 +29,20 @@ on:
           - unlisted
           - private
           - ""
+      # Vercel UI inputs. When both are set the workflow runs the
+      # `md2yt from-brief` pipeline against the committed brief instead
+      # of a hand-written spec, and commits the auto-filled spec back to
+      # specs/_uploads/<upload_id>.json so the UI can fetch it.
+      upload_id:
+        description: "Short sha id from the Vercel UI (triggers from-brief flow)"
+        type: string
+        required: false
+        default: ""
+      brief_path:
+        description: "Repo path of the .md brief committed by the Vercel UI"
+        type: string
+        required: false
+        default: ""
 
 # Concurrency limit so a tag+push combo doesn't run twice in parallel.
 concurrency:
@@ -48,21 +62,42 @@ jobs:
       - name: Resolve spec
         id: spec
         run: |
-          # Default: world_cup_2026 (the legacy single-spec default).
-          # On workflow_dispatch: use the chosen spec.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # Two ways in:
+          #   1. Vercel UI: inputs.upload_id + inputs.brief_path set →
+          #      run `md2yt from-brief` on the brief and read the spec
+          #      it writes.
+          #   2. Manual: inputs.spec set → use it directly (legacy path).
+          #   3. push / pull_request: default to the repo's stock spec.
+          if [ -n "${{ inputs.upload_id }}" ] && [ -n "${{ inputs.brief_path }}" ]; then
+            if [ ! -f "${{ inputs.brief_path }}" ]; then
+              echo "ERROR: brief not found at ${{ inputs.brief_path }}"
+              exit 1
+            fi
+            echo "from_brief=true" >> "$GITHUB_OUTPUT"
+            echo "upload_id=${{ inputs.upload_id }}" >> "$GITHUB_OUTPUT"
+            echo "brief_path=${{ inputs.brief_path }}" >> "$GITHUB_OUTPUT"
+            # spec_id is the upload_id; the from-brief step writes
+            # specs/_uploads/<upload_id>.json which the render step
+            # reads back.
+            echo "spec_id=${{ inputs.upload_id }}" >> "$GITHUB_OUTPUT"
+            echo "spec=specs/_uploads/${{ inputs.upload_id }}.json" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             SPEC_PATH="${{ inputs.spec }}"
+            if [ ! -f "$SPEC_PATH" ]; then
+              echo "ERROR: spec file not found: $SPEC_PATH"
+              exit 1
+            fi
+            echo "from_brief=false" >> "$GITHUB_OUTPUT"
+            echo "spec=$SPEC_PATH" >> "$GITHUB_OUTPUT"
+            SPEC_ID=$(jq -r '.id' "$SPEC_PATH")
+            echo "spec_id=$SPEC_ID" >> "$GITHUB_OUTPUT"
           else
             SPEC_PATH="specs/world_cup_2026.json"
+            echo "from_brief=false" >> "$GITHUB_OUTPUT"
+            echo "spec=$SPEC_PATH" >> "$GITHUB_OUTPUT"
+            SPEC_ID=$(jq -r '.id' "$SPEC_PATH")
+            echo "spec_id=$SPEC_ID" >> "$GITHUB_OUTPUT"
           fi
-          if [ ! -f "$SPEC_PATH" ]; then
-            echo "ERROR: spec file not found: $SPEC_PATH"
-            exit 1
-          fi
-          echo "spec=$SPEC_PATH" >> "$GITHUB_OUTPUT"
-          # Read the spec id for naming the artifact.
-          SPEC_ID=$(jq -r '.id' "$SPEC_PATH")
-          echo "spec_id=$SPEC_ID" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -127,6 +162,21 @@ jobs:
           echo "Memory:"; free -h
           echo "Disk:"; df -h /
 
+      - name: Run from-brief (Vercel UI uploads)
+        if: steps.spec.outputs.from_brief == 'true'
+        run: |
+          # The .md was committed to briefs/<name>-<upload_id>.md by the
+          # Vercel UI. md2yt from-brief parses it, fills TODOs, validates,
+          # and writes the spec to specs/_uploads/<upload_id>.json (which
+          # the Resolve step already targeted).
+          mkdir -p specs/_uploads
+          md2yt from-brief \
+            --input "${{ steps.spec.outputs.brief_path }}" \
+            --output-dir build \
+            --spec-out "specs/_uploads/${{ steps.spec.outputs.upload_id }}.json" \
+            --no-render
+        timeout-minutes: 5
+
       - name: Render video
         env:
           PIXABAY_API_KEY:       ${{ secrets.PIXABAY_API_KEY }}
@@ -174,32 +224,45 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.spec.outputs.spec_id }}-${{ github.sha }}
-          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          path: |
+            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
           retention-days: 90
+          if-no-files-found: warn
 
       - name: Upload render artifact (release tag)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.spec.outputs.spec_id }}-${{ github.ref_name }}
-          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          path: |
+            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
           retention-days: 365
+          if-no-files-found: warn
 
       - name: Upload render artifact (PR preview)
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.spec.outputs.spec_id }}-pr-${{ github.event.pull_request.number }}
-          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          path: |
+            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
           retention-days: 14
+          if-no-files-found: warn
 
       - name: Upload render artifact (manual dispatch)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.spec.outputs.spec_id }}-manual-${{ github.run_id }}
-          path: build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          path: |
+            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
+            specs/_uploads/${{ steps.spec.outputs.spec_id }}.json
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Upload to YouTube
         if: |
