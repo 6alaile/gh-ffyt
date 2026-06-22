@@ -8,14 +8,6 @@ on:
     branches: [split]
   workflow_dispatch:
     inputs:
-      upload_id:
-       description: "Upload ID from Vercel frontend"
-       required: false
-       type: string
-      brief_path:
-       description: "Path to the brief markdown file in the repo"
-required: false
-        type: string
       spec:
         description: "Spec file to render (edit this list when adding a new spec)"
         type: choice
