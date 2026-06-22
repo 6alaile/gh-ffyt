@@ -12,7 +12,7 @@ type Status =
   | { phase: "idle" }
   | { phase: "uploading"; fileName: string }
   | { phase: "uploaded"; upload: Upload }
-  | { phase: "dispatching"; upload: Upload }
+  | { phase: "dispatching"; upload: Upload; actionsUrl: string }
   | { phase: "running"; upload: Upload; runId: number; actionsUrl: string }
   | { phase: "ok"; upload: Upload; runId: number; artifacts: { spec: string | null; mp4: string | null; log: string | null } }
   | { phase: "failed"; message: string };
@@ -93,7 +93,14 @@ export default function HomePage() {
       return;
     }
     const { runId, actionsUrl } = await r.json();
-    setStatus({ phase: "running", upload: status.upload, runId, actionsUrl });
+    if (typeof runId === "number") {
+      setStatus({ phase: "running", upload: status.upload, runId, actionsUrl });
+    } else {
+      // dispatchPending=true: server hasn't located the run yet. Send
+      // the user to the workflow's runs list and let the next status
+      // poll reconcile. (Use the repo+workflow URL we already know.)
+      setStatus({ phase: "dispatching", upload: status.upload, actionsUrl });
+    }
   }
 
   function reset() {
