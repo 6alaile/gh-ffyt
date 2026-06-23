@@ -60,7 +60,7 @@ export async function putContents(opts: {
 }): Promise<{ sha: string; htmlUrl: string }> {
   // Check for an existing sha so we can update instead of fail on 422.
   const get = await gh(
-    `/repos/${opts.repo}/contents/${encodeURIComponent(opts.path)}`,
+    `/repos/${opts.repo}/contents/${opts.path.split("/").map(encodeURIComponent).join("/")}`,
     { method: "GET", token: opts.token }
   );
   let existingSha: string | undefined;
@@ -76,7 +76,7 @@ export async function putContents(opts: {
   if (opts.branch) body.branch = opts.branch;
   if (existingSha) body.sha = existingSha;
 
-  const put = await gh(`/repos/${opts.repo}/contents/${encodeURIComponent(opts.path)}`, {
+  const put = await gh(`/repos/${opts.repo}/contents/${opts.path.split("/").map(encodeURIComponent).join("/")}`, {
     method: "PUT",
     token: opts.token,
     body: JSON.stringify(body),
