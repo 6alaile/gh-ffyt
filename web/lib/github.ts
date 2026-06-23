@@ -51,6 +51,12 @@ export async function putContents(opts: {
   path: string;       // e.g. "briefs/example.md"
   contentBase64: string;
   message: string;
+  // Optional branch override. Defaults to the repo's default branch
+  // (usually "main") when omitted. Set this from process.env.GH_REF in
+  // /api/upload so a brief lands on the same ref the dispatch will run
+  // on — the contents API would otherwise write to the default branch
+  // and the dispatched workflow would see "file not found".
+  branch?: string;
 }): Promise<{ sha: string; htmlUrl: string }> {
   // Check for an existing sha so we can update instead of fail on 422.
   const get = await gh(
@@ -67,6 +73,7 @@ export async function putContents(opts: {
     message: opts.message,
     content: opts.contentBase64,
   };
+  if (opts.branch) body.branch = opts.branch;
   if (existingSha) body.sha = existingSha;
 
   const put = await gh(`/repos/${opts.repo}/contents/${encodeURIComponent(opts.path)}`, {

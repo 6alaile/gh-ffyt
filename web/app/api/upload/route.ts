@@ -56,6 +56,13 @@ export async function POST(req: NextRequest) {
   // accept the extra commit.
   const tempPath = `briefs/${safe.replace(/\.md$/, "")}-pending.md`;
   const contentB64 = Buffer.from(text, "utf-8").toString("base64");
+  // Honor GH_REF (defaults to repo's default branch). The dispatched
+  // workflow reads briefs/<path> from the same ref it runs on, so the
+  // brief MUST land on that ref or the dispatch step fails with
+  // "file not found". Without this branch field the contents API
+  // would write to the default branch and the workflow would never
+  // see the file when GH_REF != default.
+  const branch = process.env.GH_REF || undefined;
 
   let first;
   try {
@@ -65,6 +72,7 @@ export async function POST(req: NextRequest) {
       path: tempPath,
       contentBase64: contentB64,
       message: `md2yt-web: upload ${safe}`,
+      branch,
     });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
@@ -84,6 +92,7 @@ export async function POST(req: NextRequest) {
       path: finalPath,
       contentBase64: contentB64,
       message: `md2yt-web: rename ${safe} → ${shortId(first.sha)}`,
+      branch,
     });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

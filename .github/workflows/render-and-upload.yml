@@ -2,10 +2,20 @@ name: Render Video
 
 on:
   push:
-    branches: [split]
+    branches: [main, split]
     tags: ['v*']
+    # Path filter: only auto-render on source/spec/doc changes. Brief
+    # uploads, Vercel UI commits, and front-end edits are dispatched
+    # manually via `workflow_dispatch` (the Vercel UI's /api/render
+    # endpoint does that for briefs). Without this filter the Vercel
+    # upload flow's two commits (pending + final briefs/<name>-<sha>.md)
+    # would each trigger a wasted job that re-runs the World Cup spec.
+    paths-ignore:
+      - 'briefs/**'
+      - 'specs/_uploads/**'
+      - 'web/**'
   pull_request:
-    branches: [split]
+    branches: [main]
   workflow_dispatch:
     inputs:
       spec:
