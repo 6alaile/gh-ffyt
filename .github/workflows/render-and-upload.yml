@@ -86,9 +86,9 @@ jobs:
             echo "from_brief=true" >> "$GITHUB_OUTPUT"
             echo "upload_id=${{ inputs.upload_id }}" >> "$GITHUB_OUTPUT"
             echo "brief_path=${{ inputs.brief_path }}" >> "$GITHUB_OUTPUT"
-            # spec_id is the upload_id; the from-brief step writes
-            # specs/_uploads/<upload_id>.json which the render step
-            # reads back.
+            # spec_id is resolved after from-brief runs (the brief's H1
+            # slug is used as the build dir, not the upload_id).
+            # Placeholder here; overwritten by Resolve spec_id step below.
             echo "spec_id=${{ inputs.upload_id }}" >> "$GITHUB_OUTPUT"
             echo "spec=specs/_uploads/${{ inputs.upload_id }}.json" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -187,6 +187,13 @@ jobs:
             --no-render
         timeout-minutes: 5
 
+      - name: Resolve spec_id from filled spec
+        if: steps.spec.outputs.from_brief == 'true'
+        id: spec_id_resolved
+        run: |
+          SPEC_ID=$(jq -r '.id' "specs/_uploads/${{ steps.spec.outputs.upload_id }}.json")
+          echo "spec_id=$SPEC_ID" >> "$GITHUB_OUTPUT"
+
       - name: Render video
         env:
           PIXABAY_API_KEY:       ${{ secrets.PIXABAY_API_KEY }}
@@ -221,7 +228,7 @@ jobs:
 
       - name: Verify render output
         run: |
-          FINAL="build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4"
+          FINAL="build/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}.mp4"
           test -f "$FINAL" || (echo "ERROR: $FINAL not found"; ls -R build || true; exit 1)
           ls -lh "$FINAL"
           ffprobe -v error -show_entries \
@@ -233,9 +240,9 @@ jobs:
         if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.spec.outputs.spec_id }}-${{ github.sha }}
+          name: ${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}-${{ github.sha }}
           path: |
-            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            build/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}.mp4
             specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
           retention-days: 90
           if-no-files-found: warn
@@ -244,9 +251,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.spec.outputs.spec_id }}-${{ github.ref_name }}
+          name: ${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}-${{ github.ref_name }}
           path: |
-            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            build/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}.mp4
             specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
           retention-days: 365
           if-no-files-found: warn
@@ -255,9 +262,9 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.spec.outputs.spec_id }}-pr-${{ github.event.pull_request.number }}
+          name: ${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}-pr-${{ github.event.pull_request.number }}
           path: |
-            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            build/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}.mp4
             specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
           retention-days: 14
           if-no-files-found: warn
@@ -266,11 +273,11 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.spec.outputs.spec_id }}-manual-${{ github.run_id }}
+          name: ${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}-manual-${{ github.run_id }}
           path: |
-            build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+            build/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}.mp4
             specs/_uploads/${{ steps.spec.outputs.upload_id }}.json
-            specs/_uploads/${{ steps.spec.outputs.spec_id }}.json
+            specs/_uploads/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}.json
           retention-days: 30
           if-no-files-found: warn
 
@@ -290,6 +297,6 @@ jobs:
           YT_THUMBNAIL_PATH:        ${{ secrets.YT_THUMBNAIL_PATH }}
           YT_CAPTIONS_PATH:         ${{ secrets.YT_CAPTIONS_PATH }}
           YT_SPEC_PATH:             ${{ steps.spec.outputs.spec }}
-          VIDEO_FILE:               build/${{ steps.spec.outputs.spec_id }}/${{ steps.spec.outputs.spec_id }}.mp4
+          VIDEO_FILE:               build/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}/${{ steps.spec_id_resolved.outputs.spec_id || steps.spec.outputs.spec_id }}.mp4
         run: md2yt upload
         timeout-minutes: 30
