@@ -546,7 +546,11 @@ def _parse_bullet_scene_block(name: str, idx: int, body: str) -> dict[str, Any]:
                     card["quote"] = parts[3]
                 scene["cards"].append(card)
 
-    # Voiceover / script: prefer a "Voiceover:" line, fall back to a quoted block.
+    # Voiceover / script: prefer a "Voiceover:" line, fall back to a
+    # quoted block, fall back to a bare double-quoted line. The bare-
+    # quoted fallback covers briefs where the user typed the VO as a
+    # plain line of dialogue inside the scene block (the "Full Scene
+    # Schema" format in briefs/Video2_brief.md uses this).
     m = re.search(r"\*\*(?:Voiceover|Script):\*\*\s*(.+?)(?=\n\n|\Z)", body, re.DOTALL)
     if m:
         scene["script"] = m.group(1).strip()
@@ -555,17 +559,43 @@ def _parse_bullet_scene_block(name: str, idx: int, body: str) -> dict[str, Any]:
         qb = re.search(r"^>\s*(.+?)(?=\n[^>]|\Z)", body, re.MULTILINE | re.DOTALL)
         if qb:
             scene["script"] = qb.group(1).strip()
+        else:
+            # Bare double-quoted line: e.g. `"Some line of VO."`
+            bq = re.search(r'^\s*"(.+?)"\s*$', body, re.MULTILINE | re.DOTALL)
+            if bq:
+                scene["script"] = bq.group(1).strip()
 
     return scene
 
 
 def _list_block(body: str, name: str) -> list[str]:
-    """Return the bullet list under '**Name:**' as a list of strings."""
-    m = re.search(rf"\*\*{name}:\*\*\s*\n((?:\s*[-*]\s+.+?\n)+)", body)
+    """Return the bullet list under '**Name:**' (or 'Name:') as a list of strings.
+
+    Tolerates both the bolded form (`**Cards:**`) and the bare form
+    (`Cards:`), and the standard `-` / `*` bullets plus the `•` U+2022
+    glyph the user used in Video2_brief.md. The list ends at the next
+    `**Field:**` / `Field:` line or the end of the body.
+    """
+    # Match the heading (bolded or bare), then capture all subsequent
+    # lines that start with a recognised bullet character.
+    heading_re = rf"\**\s*{re.escape(name)}\s*:\**\s*\n"
+    m = re.search(heading_re, body)
     if not m:
         return []
-    raw = m.group(1)
-    return [re.sub(r"^\s*[-*]\s+", "", l).rstrip() for l in raw.splitlines() if l.strip()]
+    after = body[m.end():]
+    # The list ends at the next heading line (bolded or bare) or EOF.
+    end_re = re.compile(r"\n\s*\**\s*[A-Z][A-Za-z ]{0,30}\s*:\**\s*(?=\n|$)")
+    end_match = end_re.search(after)
+    block = after if end_match is None else after[:end_match.start()]
+    # Each line: strip leading whitespace + bullet (•, -, *), keep the rest.
+    out: list[str] = []
+    for line in block.splitlines():
+        if not line.strip():
+            continue
+        m2 = re.match(r"^\s*[•\-\*]\s+(.+)$", line)
+        if m2:
+            out.append(m2.group(1).rstrip())
+    return out
 
 
 def _scene_id(name: str, idx: int) -> str:
