@@ -1,0 +1,3 @@
+{
+  "ignoreCommand": "git diff --name-only HEAD^ HEAD | grep -qvE '^(briefs/|specs/_uploads/)' || exit 0"
+}

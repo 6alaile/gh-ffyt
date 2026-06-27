@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { putContents, repoEnv } from "@/lib/github";
-import { sanitizeBriefFilename, shortId } from "@/lib/util";
+import { sanitizeBriefFilename } from "@/lib/util";
 
 export const runtime = "nodejs";   // need Buffer for base64
 export const dynamic = "force-dynamic";
@@ -54,22 +54,17 @@ export async function POST(req: NextRequest) {
   // first commit by computing it client-side from the bytes — but Node's
   // Buffer.hash isn't available, so instead we do a temporary path and
   // accept the extra commit.
-  const tempPath = `briefs/${safe.replace(/\.md$/, "")}-pending.md`;
+  const uploadId = Date.now().toString(36);
+  const finalPath = `briefs/${safe.replace(/\.md$/, "")}-${uploadId}.md`;
   const contentB64 = Buffer.from(text, "utf-8").toString("base64");
-  // Honor GH_REF (defaults to repo's default branch). The dispatched
-  // workflow reads briefs/<path> from the same ref it runs on, so the
-  // brief MUST land on that ref or the dispatch step fails with
-  // "file not found". Without this branch field the contents API
-  // would write to the default branch and the workflow would never
-  // see the file when GH_REF != default.
   const branch = process.env.GH_REF || undefined;
 
-  let first;
+  let result;
   try {
-    first = await putContents({
+    result = await putContents({
       token: env.token,
       repo: env.repo,
-      path: tempPath,
+      path: finalPath,
       contentBase64: contentB64,
       message: `md2yt-web: upload ${safe}`,
       branch,
@@ -77,6 +72,12 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
+
+  return NextResponse.json({
+    id: uploadId,
+    path: finalPath,
+    htmlUrl: result.htmlUrl,
+  });
 
   // Rename to include the short sha. The PUT endpoint lets us move a file
   // by writing to a new path; we keep the original temp file in place
