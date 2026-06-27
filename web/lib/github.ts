@@ -177,9 +177,10 @@ export async function listRuns(opts: {
   token: string;
   repo: string;
   workflow: string;
+  branch?: string;
 }): Promise<RunListItem[]> {
   const r = await gh(
-    `/repos/${opts.repo}/actions/workflows/${encodeURIComponent(opts.workflow)}/runs?per_page=10`,
+    `/repos/${opts.repo}/actions/workflows/${encodeURIComponent(opts.workflow)}/runs?per_page=10${opts.branch ? `&branch=${opts.branch}` : ""}`,
     { method: "GET", token: opts.token }
   );
   if (!r.ok) {

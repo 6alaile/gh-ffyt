@@ -17,9 +17,12 @@ type Status =
   | { phase: "ok"; upload: Upload; runId: number; artifacts: { spec: string | null; mp4: string | null; log: string | null } }
   | { phase: "failed"; message: string };
 
+type RunItem = { id: number; created_at: string; html_url: string; status: string; conclusion: string | null };
+
 export default function HomePage() {
   const [status, setStatus] = useState<Status>({ phase: "idle" });
   const [pollHandle, setPollHandle] = useState<number | null>(null);
+  const [runs, setRuns] = useState<RunItem[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Poll /api/status while a render is running, then stop.
@@ -57,6 +60,20 @@ export default function HomePage() {
       window.clearInterval(handle);
     };
   }, [status, pollHandle]);
+
+  useEffect(() => {
+    async function fetchHistory() {
+      try {
+        const r = await fetch("/api/history");
+        if (!r.ok) return;
+        const data = await r.json();
+        setRuns(data.runs ?? []);
+      } catch {}
+    }
+    fetchHistory();
+    const h = window.setInterval(fetchHistory, 25 * 60 * 1000);
+    return () => window.clearInterval(h);
+  }, []);
 
   async function onUpload(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -211,6 +228,39 @@ export default function HomePage() {
           </button>
         </section>
       )}
+
+      {runs.length > 0 && (
+        <section className="card mt-8">
+          <h2 className="mb-4 text-lg font-semibold">Recent runs (split)</h2>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-muted">
+                <th className="pb-2 pr-4">Date</th>
+                <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2">Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <tr key={run.id} className="border-t border-border">
+                  <td className="py-2 pr-4 text-muted">{new Date(run.created_at).toLocaleString()}</td>
+                  <td className="py-2 pr-4">
+                    <span className={run.conclusion === "success" ? "badge-ok" : run.status === "in_progress" ? "badge-running" : "badge-failed"}>
+                      {run.conclusion ?? run.status}
+                    </span>
+                  </td>
+                  <td className="py-2">
+                    <a className="text-accent underline" href={run.html_url} target="_blank" rel="noreferrer">
+                      Actions →
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+    )}
+
     </main>
   );
 }
