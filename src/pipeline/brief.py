@@ -88,6 +88,7 @@ class BriefParseError(ValueError):
 # ─────────────────────────────────────────────────────────────────────
 def parse_brief(text: str) -> dict[str, Any]:
     """Parse a .md brief string and return a spec dict (possibly incomplete)."""
+    text = _normalize_brief(text)
     sections = _split_sections(text)
     spec: dict[str, Any] = {"scenes": []}
     top_title = _h1_title(text)
@@ -152,6 +153,120 @@ def parse_brief_file(path: str | Path) -> dict[str, Any]:
     if not p.exists():
         raise FileNotFoundError(p)
     return parse_brief(p.read_text(encoding="utf-8"))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Brief normalizer
+#
+# Briefs may contain a "Full Scene Schema (Repo Format)" section written
+# without ## headings or **Bold:** field markers — a common format when
+# the brief is drafted outside the repo template. This function rewrites
+# that section into the canonical form the parser expects, leaving
+# everything else (prose outline, results, YouTube metadata) untouched.
+# ─────────────────────────────────────────────────────────────────────
+
+# Known multi-word field names that appear bare (e.g. "Top label: LIVE")
+_FIELD_RE = re.compile(
+    r"^("
+    r"Kind|Duration|Query|Top label|Bottom label|Pill|Eyebrow|"
+    r"Headline|Subhead|Sub|Name|Voiceover|Script|"
+    r"Counter label|Counter num|Counter suffix|Image query|"
+    r"Stats|Names|Items|Cards"
+    r"):\s*(.*)$",
+    re.IGNORECASE,
+)
+
+# Scene heading: "Hook" alone, or "Scene N — Title" / "Scene N: Title"
+_SCENE_HEADING_RE = re.compile(
+    r"^(Hook(?:\s*\([^)]*\))?|Scene\s+\d+\s*[—\-–:]\s*.+)$"
+)
+
+
+def _normalize_brief(text: str) -> str:
+    """Rewrite the 'Full Scene Schema' section of a brief into parser-
+    canonical form (## headings, **Field:** markers). No-ops if the
+    section is already well-formed or absent."""
+    # Normalize Windows line endings first.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    marker = "Full Scene Schema"
+    start = text.find(marker)
+    if start == -1:
+        return text  # no schema section — nothing to normalize
+
+    # Find the line start of the marker.
+    line_start = text.rfind("\n", 0, start) + 1
+
+    # Schema section ends at next ─── divider or YouTube Metadata heading.
+    rest = text[line_start:]
+    end_m = re.search(r"\n(?:───+|#{1,2}\s*YouTube)", rest)
+    schema_end = line_start + (end_m.start() if end_m else len(rest))
+
+    before = text[:line_start]
+    schema = text[line_start:schema_end]
+    after = text[schema_end:]
+
+    normalized_lines: list[str] = []
+    for line in schema.splitlines():
+        stripped = line.strip()
+
+        # Skip the section header line itself.
+        if stripped.startswith("Full Scene Schema"):
+            normalized_lines.append(line)
+            continue
+
+        # Divider lines — leave as-is.
+        if re.match(r"^─{3,}$", stripped):
+            normalized_lines.append(line)
+            continue
+
+        # Blank lines — pass through.
+        if not stripped:
+            normalized_lines.append("")
+            continue
+
+        # Bullet lines (•, -, *) — pass through unchanged.
+        if re.match(r"^[•\-\*]\s", stripped):
+            normalized_lines.append(line)
+            continue
+
+        # Quoted VO lines — pass through unchanged.
+        if stripped.startswith('"') or stripped.startswith(">"):
+            normalized_lines.append(line)
+            continue
+
+        # Scene heading (bare) → ## heading.
+        if _SCENE_HEADING_RE.match(stripped):
+            normalized_lines.append(f"## {stripped}")
+            continue
+
+        # Field line (bare) → **Field:** value.
+        fm = _FIELD_RE.match(stripped)
+        if fm:
+            field, value = fm.group(1), fm.group(2)
+            normalized_lines.append(f"**{field}:** {value}".rstrip())
+            continue
+
+        # Anything else — pass through.
+        normalized_lines.append(line)
+
+    # Also promote a bare "YouTube Metadata" heading to ## if not already,
+    # and bold-ify bare field lines within that section.
+    yt_marker = "## YouTube Metadata"
+    yt_start = after.find("YouTube Metadata")
+    if yt_start >= 0:
+        # Re-find after potential promotion.
+        after = re.sub(r"(?m)^(YouTube Metadata)\s*$", r"## \1", after)
+        # Now bold-ify bare fields within the YouTube block.
+        yt_field_re = re.compile(
+            r"(?m)^(Title options|Description|Tags|Category|Best publish time):(.*)",
+            re.IGNORECASE,
+        )
+        after = yt_field_re.sub(lambda m: f"**{m.group(1)}:**{m.group(2)}", after)
+    else:
+        after = re.sub(r"(?m)^(YouTube Metadata)\s*$", r"## \1", after)
+
+    return before + "\n".join(normalized_lines) + after
 
 
 # ─────────────────────────────────────────────────────────────────────
