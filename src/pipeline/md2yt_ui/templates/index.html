@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MD2YT — Brief Uploader</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>MD2YT <span class="muted">— Markdown to Video</span></h1>
+    <p class="muted">Drop a content brief, watch it render. One render at a time.</p>
+  </header>
+
+  <section id="upload-section">
+    <h2>Upload a brief</h2>
+    <form id="upload-form" enctype="multipart/form-data">
+      <input type="file" name="brief" id="brief-input" accept=".md,text/markdown" required>
+      <button type="submit" id="upload-btn">Upload &amp; Render</button>
+    </form>
+    <div id="upload-msg" role="status"></div>
+  </section>
+
+  <section id="briefs-section">
+    <h2>Briefs</h2>
+    {% if not runs %}
+      <p class="muted">No briefs yet. Upload one above.</p>
+    {% else %}
+      <table id="briefs-table">
+        <thead>
+          <tr>
+            <th>Brief ID</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Finished</th>
+            <th>Artifacts</th>
+          </tr>
+        </thead>
+        <tbody id="briefs-tbody">
+          {% for run in runs %}
+            <tr data-brief-id="{{ run.brief_id }}">
+              <td><code>{{ run.brief_id }}</code></td>
+              <td><span class="badge badge-{{ run.status }}">{{ run.status }}</span></td>
+              <td class="muted small">{{ run.started_at or "—" }}</td>
+              <td class="muted small">{{ run.finished_at or "—" }}</td>
+              <td class="artifacts">
+                {% if run.status == "ok" %}
+                  <a href="/runs/{{ run.brief_id }}/mp4">MP4</a>
+                  <a href="/runs/{{ run.brief_id }}/spec.json" download>spec.json</a>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% if run.status in ("running", "queued", "failed") %}
+              <tr data-log-for="{{ run.brief_id }}">
+                <td colspan="5">
+                  <pre class="log" data-brief-id="{{ run.brief_id }}">…</pre>
+                </td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </section>
+
+  <footer>
+    <p class="muted small">
+      Renders run <code>python -u -m pipeline.cli from-brief --input &lt;brief.md&gt;</code> as a subprocess.
+      Live status updates every 2s.
+    </p>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

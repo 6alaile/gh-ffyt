@@ -1,0 +1,19 @@
+{
+  "id": "good_fixture",
+  "youtube": {
+    "title": "A Good Spec",
+    "description": "Has every required top-level field.",
+    "tags": ["test", "fixture"]
+  },
+  "scenes": [
+    {
+      "id": "01_hook",
+      "kind": "hook",
+      "duration_s": 6,
+      "script": "s",
+      "eyebrow": "// E",
+      "headline": "BIG HOOK",
+      "subhead": "// S"
+    }
+  ]
+}

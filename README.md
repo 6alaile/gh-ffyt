@@ -1,157 +1,326 @@
-# gh-ffyt — World Cup 2026 faceless video pipeline
+# MD2YT — Markdown-to-YouTube faceless video factory
 
-A 2:48 cinematic explainer about the 2026 FIFA World Cup, produced from a
-single HyperFrames HTML composition (`hf/index.html`) and rendered headlessly
-on GitHub Actions. The same workflow can publish the result to YouTube.
+MD2YT is a general-purpose pipeline that turns a JSON spec into a 1920×1080 30 fps
+MP4 and optionally publishes it to YouTube. The first spec is the 2026
+FIFA World Cup explainer; new specs need zero code changes.
+
+The project is named **MD2YT** (Markdown → YouTube) and installs as a single
+console binary, **`md2yt`**, that drives the whole pipeline.
 
 ```
-hf/index.html (GSAP composition)
-   -> HyperFrames CLI (npx hyperframes render)
-   -> world_cup_video_01_FINAL_v2.mp4 (1920x1080, 30fps, ~168s)
-   -> YouTube Data API v3 (scripts/upload_to_youtube.py)
+specs/<name>.json  ──►  md2yt compose
+                              │
+                              ├─ fetch stock footage (Pixabay → Pexels)
+                              ├─ voiceover per scene (Edge TTS default, ElevenLabs optional)
+                              ├─ render per-scene HTML (resources/base.html + per-kind CSS)
+                              ├─ npx hyperframes render (per scene)
+                              └─ ffmpeg xfade concat
+                                          │
+                                          ▼
+                          build/<id>/<id>.mp4   ──►  md2yt upload
+                                                       │
+                                                       ▼
+                                                 YouTube Data API v3
 ```
 
-All API keys and OAuth tokens live in **Settings -> Secrets**, never in code.
+API keys and OAuth tokens live in **Settings → Secrets**; never in code.
 
 ---
 
-## Prerequisites
+## What is in this repo
 
-You only need these if you want to **regenerate** the assets locally; the
-default render flow does not call out to any third-party API.
+| Path | Purpose |
+|---|---|
+| `pyproject.toml` | Package metadata + console script (`md2yt = pipeline.cli:main`) + deps. |
+| `src/pipeline/` | Installable Python package. The `md2yt` binary lives here. |
+| `src/pipeline/cli.py` | Argparse subcommand dispatcher (`compose`, `validate`, `upload`, `brief`). |
+| `src/pipeline/schema.py` | JSON validator for specs. Loud on errors. |
+| `src/pipeline/renderers.py` | Per-kind (8 kinds) CSS + content + GSAP animations. |
+| `src/pipeline/fetchers.py` | Pixabay + Pexels video search. |
+| `src/pipeline/voiceover.py` | Edge TTS (default) + ElevenLabs (dormant). |
+| `src/pipeline/compose.py` | The orchestrator. Wires fetch → TTS → HTML → HyperFrames → xfade. |
+| `src/pipeline/upload.py` | Spec-driven YouTube uploader. |
+| `src/pipeline/brief.py` | Optional: parse a `.md` content brief into a draft spec. |
+| `src/pipeline/config.py` | Env-var hub (one module owns every `os.environ` read). |
+| `src/pipeline/resources/base.html` | Shared HTML shell: palette, fonts, top/bottom bars, vignette. |
+| `src/pipeline/resources/fonts/*.woff2` | Bundled fonts (Anton, Manrope, JetBrains Mono, Arial Narrow). |
+| `specs/*.json` | One spec per video. JSON, validated, fully describes the video. |
+| `tests/` | Pytest suite — mirrors `src/pipeline/`. |
+| `docs/` | Long-form documentation (placeholder; populated as the project grows). |
+| `.github/workflows/render-and-upload.yml` | CI: per-spec render + optional upload. |
 
-| Service | Why | Where to get it |
+> **Status (2026-06-18):** `md2yt` is the only entry point. The
+> `scripts/`, `templates/`, `hf/` directories and `requirements.txt` were
+> retired (parked in `tmp/`); the `src/pipeline/` package is the source
+> of truth. `pip install -e .[dev]` exposes the binary; tests live
+> under `tests/`.
+
+---
+
+## Write a spec
+
+A spec has three top-level sections: `id`, `youtube`, `scenes`.
+Optional: `tts` (ElevenLabs overrides), `palette` (re-skin).
+
+```json
+{
+  "id": "my_video",
+  "youtube": {
+    "title": "...",
+    "description": "...",
+    "tags": ["..."],
+    "privacy": "private",
+    "category_id": "17"
+  },
+  "scenes": [
+    { "id": "01_hook", "kind": "hook",   "duration_s": 6, "script": "...",
+      "eyebrow": "...", "headline": "...", "subhead": "..." },
+    { "id": "02_scale", "kind": "scale", "duration_s": 12, "script": "...",
+      "headline": "...", "stats": [{"num":"48","label":"NATIONS"}, ...] }
+    // ... one entry per scene
+  ]
+}
+```
+
+### The 8 scene kinds
+
+| Kind | Required fields | Vibe |
 |---|---|---|
-| Pexels | Stock-footage clips (only if you re-run `produce_video_01.py`) | <https://pexels.com/api> |
-| ElevenLabs | AI voiceover (only if you re-run `generate_voiceover.py`) | <https://elevenlabs.io> |
-| Google Cloud | YouTube Data API v3 (only if you want to publish) | <https://console.cloud.google.com> |
+| `hook` | `eyebrow`, `headline` (use `<accent>…</accent>` for the gold word), `subhead` | Big opening slam |
+| `scale` | `headline`, `stats` (list of `{num,label}`) | Numbers wall |
+| `portrait` | `eyebrow`, `headline`, `names` (list of `{name,year}`) | Two (or more) faces |
+| `record` | `counter_label`, `counter_num`, `counter_suffix`, `name` | One big counter |
+| `grid` | `headline`, `cards` (list of `{flag,name,stats,quote}`) | 3-4 host cards |
+| `quote` | `eyebrow`, `quote` (use `<accent>…</accent>` for the gold word), `attribution` | One big quote |
+| `list` | `eyebrow`, `headline`, `items` (list of strings) | Numbered list |
+| `split` | `eyebrow`, `headline`, `body`, `image_query` | Two-column text + image |
 
-For the YouTube OAuth flow you specifically need a **"Desktop app" OAuth
-client**, not a "Web application" one.
+See `specs/_example.json` for a minimal reference spec that uses every
+kind, and `specs/world_cup_2026.json` for the full reference implementation.
+
+Common per-scene fields (all kinds): `source` (`pixabay` | `pexels`),
+`query` (search string), `min_width`, `top_label`, `bottom_label`, `pill`.
+
+### Multi-line voiceover
+
+Embed `\n` for newlines in the `script` field. JSON strings handle this
+naturally:
+
+```json
+"script": "Line one.\nLine two.\nLine three."
+```
 
 ---
 
-## One-time local setup
+## Install
 
-### 1. Render locally (no secrets required)
-
-```bash
-pip install -r requirements.txt
-npx hyperframes preview hf           # interactive browser preview
-npx hyperframes render hf \
-  --output world_cup_video_01_FINAL_v2.mp4 --quality high
-```
-
-This produces the same MP4 that CI produces, using the assets already
-committed under `hf/assets/`.
-
-### 2. (Optional) Re-run the legacy Pexels asset pipeline
+MD2YT is a regular Python package. Install it editable (so `md2yt` is
+on your `PATH` and points at your working copy):
 
 ```bash
-export PEXELS_API_KEY=your-key
-python scripts/produce_video_01.py
+# Runtime deps only:
+pip install -e .
+
+# Or, with the test/dev extras:
+pip install -e .[dev]
 ```
 
-The script writes its legacy concat build into `video_01_assets/` (gitignored).
-The HyperFrames render is the real final video and does not need this step.
-
-### 3. (Optional) Regenerate the voiceover
-
-```bash
-export ELEVENLABS_API_KEY=...
-export ELEVENLABS_VOICE_ID=...   # elevenlabs.io -> Voices -> My Voices
-python scripts/generate_voiceover.py
-```
-
-### 4. (Optional) Set up YouTube publishing
-
-1. Google Cloud Console -> your project -> **Enable YouTube Data API v3**.
-2. **APIs & Services -> Credentials -> Create Credentials -> OAuth client ID ->
-   Application type: Desktop app** -> Download JSON -> save as
-   `client_secrets.json` in the repo root (gitignored).
-3. Run the uploader once locally to do the browser consent flow and create
-   `youtube_token.pickle` (gitignored):
-
-   ```bash
-   pip install -r requirements.txt
-   python scripts/upload_to_youtube.py
-   ```
-
-   A browser tab opens, you sign in, the script writes the refresh token to
-   `youtube_token.pickle`.
-4. Base64-encode both files for CI:
-
-   ```bash
-   base64 -w0 client_secrets.json   > client_secrets.b64
-   base64 -w0 youtube_token.pickle  > youtube_token.b64
-   ```
+Python 3.11 or newer is required. `npx` (Node ≥ 22) and `ffmpeg` must be
+on `PATH` — install Node from nodejs.org and `ffmpeg` via your OS
+package manager (e.g. `apt-get install -y ffmpeg` on Debian/Ubuntu,
+`brew install ffmpeg` on macOS).
 
 ---
 
-## Setting GitHub repo secrets
+## Run locally
 
-Repo -> **Settings -> Secrets and variables -> Actions -> New repository secret**.
+```bash
+# 1. Set the API keys you need. The most common ones:
+export PIXABAY_API_KEY=...     # primary footage source
+export PEXELS_API_KEY=...      # fallback footage source
+export ELEVENLABS_API_KEY=...  # optional (dormant by default)
+export ELEVENLABS_VOICE_ID=... # optional (dormant by default)
 
-| Secret | Required for | Value |
-|---|---|---|
-| `PEXELS_API_KEY` | Local re-gen of Pexels clips (not used in CI render) | Your Pexels key |
-| `ELEVENLABS_API_KEY` | Local re-gen of voiceover (not used in CI render) | Your ElevenLabs key |
-| `ELEVENLABS_VOICE_ID` | Same as above | ElevenLabs voice id |
-| `YT_CLIENT_SECRETS_BASE64` | YouTube publish step | Paste contents of `client_secrets.b64` |
-| `YT_TOKEN_PICKLE_BASE64` | YouTube publish step | Paste contents of `youtube_token.b64` |
-| `YT_PRIVACY_STATUS` | Optional | `public` \| `unlisted` \| `private` (default: `private`) |
-| `YT_THUMBNAIL_PATH` | Optional | Path to a `thumbnail.jpg` to set after upload |
-| `YT_CAPTIONS_PATH` | Optional | Path to a `captions.srt` to attach |
+# 2. Validate the spec
+md2yt validate --spec specs/world_cup_2026.json
+# OK: specs/world_cup_2026.json validates
+
+# 3. Render the video
+md2yt compose --spec specs/world_cup_2026.json --output-dir build
+# Final MP4: build/world_cup_2026/world_cup_2026.mp4
+
+# 4. (Optional) upload to YouTube. See YOUTUBE_SETUP.md for the one-time
+#    OAuth + base64-secrets wiring.
+md2yt upload --spec specs/world_cup_2026.json
+```
+
+### Turning `TTS_ALLOW_ELEVENLABS` on
+
+Edge TTS is the default and needs no key. To switch to ElevenLabs, set
+`TTS_ALLOW_ELEVENLABS=1` in the env, then install the optional
+`elevenlabs` extra and export `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID`.
+
+### Other subcommands
+
+```
+md2yt brief     --help
+md2yt brief     --input content_brief.md --output specs/_draft.json
+```
 
 ---
 
-## Triggering the workflow
+## Write a spec from a markdown content brief
+
+If you start from prose, the converter turns a structured `.md` brief into
+a draft spec you can edit. See `md2yt brief --help` for the documented
+schema. Quick example:
+
+```bash
+md2yt brief --input example_brief.md --output specs/_draft.json
+# Reads brief, writes draft spec, prints which fields it filled.
+```
+
+The converter is rule-based: it only fills fields it can recognise
+unambiguously. Everything else is left as `TODO` for you to fill in.
+
+---
+
+## From markdown to video in one command
+
+`md2yt from-brief` chains the parse → auto-fill → validate → render →
+(optional) upload pipeline so a single brief produces a finished MP4:
+
+```bash
+md2yt from-brief --input Content_Brief.md --output-dir build
+# Final: build/<spec.id>/<spec.id>.mp4
+```
+
+What happens under the hood:
+
+1. **Parse** the `.md` — recognises `## Hook`, `## Scene N — Title`,
+   `## Script Outline` (markdown table), and `## YouTube Metadata`.
+2. **Auto-fill** the `TODO` fields with sensible defaults (kind from
+   heading keywords, duration_s, voiceover script, headline, eyebrow,
+   stats/items/names/cards, YouTube title/description/tags/category).
+   The CLI prints a `Fill report` listing every inferred value so you
+   can audit before render.
+3. **Validate** the filled spec against `pipeline.schema`.
+4. **Compose** — fetch → re-encode → TTS → HTML → render → xfade,
+   exactly like `md2yt compose`.
+5. **Upload** (only with `--upload`): `md2yt upload` against the rendered
+   MP4 and the filled spec. Requires YouTube secrets wired (see
+   `YOUTUBE_SETUP.md`).
+
+Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `--no-render` | Parse + fill + validate + write the spec to disk; skip compose. Use this to inspect what the auto-filler produced. |
+| `--spec-out <path>` | Where to write the filled spec. Default: `build/<id>/spec.json`. |
+| `--upload` | Run `md2yt upload` after compose succeeds. |
+| `--quality low` | Render at lower quality to iterate faster. |
+
+The auto-filler is best-effort. If you care about specific copy,
+`--no-render` and hand-edit the produced `spec.json` before running
+`md2yt compose` against it.
+
+---
+
+## GitHub Actions
 
 | Event | What happens |
 |---|---|
 | Push to `main` | Render + upload (with `YT_PRIVACY_STATUS`) |
-| Push tag `v*` | Render + upload, artifact retained 365 days |
+| Push tag `v*` | Render + upload, 365-day artifact retention |
 | Pull request to `main` | Render only, no upload; PR preview artifact for 14 days |
-| `workflow_dispatch` (Actions tab) | Manual, with optional `skip_upload` and `privacy_status` inputs |
+| `workflow_dispatch` | Manual, with `spec` dropdown + `skip_upload` + `privacy_status` |
 
-The render step typically takes 12-18 minutes; the upload step a few more.
-Total job time: 18-25 min for upload-included runs.
+The `meta` job discovers every `specs/*.json` (except `_example.json`)
+and exposes them as the dispatch dropdown options. So adding a new
+spec to the repo automatically adds it to the manual UI.
+
+Render step: ~16 min for an 8-scene video. Upload: a few more. Total
+job time: 18–25 min for upload-included runs.
+
+### Required secrets
+
+| Secret | Why |
+|---|---|
+| `PIXABAY_API_KEY` | Primary footage source |
+| `PEXELS_API_KEY` | Fallback footage source |
+| `ELEVENLABS_API_KEY` | Voiceover (dormant unless `TTS_ALLOW_ELEVENLABS=1`) |
+| `ELEVENLABS_VOICE_ID` | Voiceover (dormant unless `TTS_ALLOW_ELEVENLABS=1`) |
+| `YT_CLIENT_SECRETS_BASE64` | YouTube publish |
+| `YT_TOKEN_PICKLE_BASE64` | YouTube publish |
+| `YT_PRIVACY_STATUS` | Optional default privacy |
+| `YT_THUMBNAIL_PATH` | Optional thumbnail |
+| `YT_CAPTIONS_PATH` | Optional captions.srt |
+
+For YouTube OAuth you need a **"Desktop app"** client, not a Web
+application client. Run `md2yt upload` once locally to complete the
+consent flow and generate `youtube_token.pickle`. Base64-encode both
+files (`base64 -w0 … > .b64`) and paste the contents as the matching
+secret. See `YOUTUBE_SETUP.md` for the full procedure.
 
 ---
 
-## Regenerating assets
+## Adding a new scene kind
 
-If you want a fresh voiceover or fresh stock footage (e.g. after a Pexels
-clip is taken down), run the scripts locally with the env vars set and
-commit the new files under `hf/assets/`. The CI workflow does not
-regenerate assets — it only renders the HTML composition against the
-committed assets.
-
-After replacing clips, run `python scripts/reencode_clips.py` once to
-enforce a 1-second GOP, which silences HyperFrames' "sparse keyframes"
-warning and makes random-access snappy.
+1. Add it to `SCENE_KINDS` and `KIND_SCHEMAS` in `src/pipeline/schema.py`.
+2. Add a renderer in `src/pipeline/renderers.py` (CSS + HTML + GSAP).
+3. Add a kind-specific section in `src/pipeline/resources/base.html` (if needed).
+4. Add a row to the "8 scene kinds" table in this README.
 
 ---
 
 ## Architecture
 
 ```
-hf/index.html (GSAP composition)
-        |
-        | npx hyperframes render
-        v
-world_cup_video_01_FINAL_v2.mp4
-        |
-        | python scripts/upload_to_youtube.py
-        v
-    YouTube Data API v3
+specs/<id>.json
+   ├─ schema.py validates
+   ├─ fetchers.py: pixabay → pexels (fallback) → download → reencode
+   ├─ voiceover.py: edge-tts (default) / elevenlabs (dormant)
+   ├─ renderers.py + resources/base.html → per-scene HTML
+   ├─ npx hyperframes render (per scene)
+   └─ ffmpeg xfade concat
+                                          │
+                                          ▼
+              build/<id>/<id>.mp4
+                                          │
+                                          ▼
+              upload.py → YouTube Data API v3
 ```
 
-Pexels and ElevenLabs feed the assets that are committed to the repo. The
-workflow only renders + uploads.
+Per-scene renders replace the original master composition. The trade-off:
+no cross-scene GSAP transitions (zoom-fade, chromatic split, shutter,
+focus pull, etc.). Mitigated by a 0.3 s xfade between every scene pair.
+If a v2 brings back the master composition, set `--xfade 0` in the
+composer.
+
+---
+
+## Configuration
+
+Every environment variable is read by exactly one module —
+`src/pipeline/config.py`. If you want to know which knobs exist and
+what they default to, read that file. If you want to add a new knob,
+add it there.
+
+The config surface is grouped into five dataclasses:
+
+| Dataclass | Reads |
+|---|---|
+| `FootageKeys` | `PIXABAY_API_KEY`, `PEXELS_API_KEY` |
+| `TTSConfig` | `EDGE_TTS_VOICE`, `EDGE_TTS_RATE`, `EDGE_TTS_VOLUME`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `TTS_ALLOW_ELEVENLABS` |
+| `RenderConfig` | `RENDER_PARALLEL` |
+| `YouTubeSecrets` | `YT_CLIENT_SECRETS_BASE64`, `YT_TOKEN_PICKLE_BASE64` |
+| `YouTubeDefaults` | `YT_PRIVACY_STATUS`, `YT_THUMBNAIL_PATH`, `YT_CAPTIONS_PATH`, `YT_SPEC_PATH`, `VIDEO_FILE` |
+
+The dataclasses are constructed with `from_env()` in their respective
+consumer modules — there is no global config object.
 
 ---
 
 ## License
 
-UNLICENSED — see `LICENSE`.
+UNLICENSED — see `LICENSE`. Private repo.
