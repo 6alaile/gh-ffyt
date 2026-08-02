@@ -20,6 +20,7 @@ Reads env vars only via pipeline.config — no `os.environ.get` here.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -309,6 +310,47 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Scenes:  {len(spec['scenes'])}")
     print(f"Aspect:  {render_cfg.aspect_ratio} ({render_cfg.stage_width}x{render_cfg.stage_height})\n")
 
+    # 0. Cache-busting: audio/clip caching below is keyed by scene id
+    # alone, so if a scene's `script` text is edited between runs (e.g.
+    # re-writing a brief and regenerating specs/<id>.json with the same
+    # scene ids) the stale .mp3 — and the clip trimmed to *its* length —
+    # would otherwise be silently reused, undoing the audio-anchored
+    # duration fix below. Each scene's script is hashed and compared
+    # against a sidecar `<id>.hash` written the last time its audio was
+    # generated; a mismatch (or first run) purges that scene's cached
+    # audio/clip/raw files so everything regenerates from the current
+    # text. If any scene's script changed, the per-scene render MP4s and
+    # the final crossfade-concat output are wiped too, since a duration
+    # change anywhere shifts every downstream timing.
+    any_script_changed = False
+    script_hashes: dict[str, str] = {}
+    for scene in spec["scenes"]:
+        content_hash = hashlib.sha256(scene["script"].encode("utf-8")).hexdigest()[:16]
+        hash_path = audio_dir / f"{scene['id']}.hash"
+        stored_hash = hash_path.read_text().strip() if hash_path.exists() else None
+        script_hashes[scene["id"]] = content_hash
+        if stored_hash == content_hash:
+            continue
+        any_script_changed = True
+        stale = [
+            audio_dir / f"{scene['id']}.mp3",
+            clips_dir / f"{scene['id']}.mp4",
+            clips_dir / f"{scene['id']}_raw.mp4",
+        ]
+        removed = [p.name for p in stale if p.exists()]
+        for p in stale:
+            p.unlink(missing_ok=True)
+        if removed:
+            print(f"  [cache-bust] {scene['id']}: script changed — purged {', '.join(removed)}")
+
+    if any_script_changed:
+        stale_renders = list(render_dir.glob("scene_*.mp4"))
+        final_mp4 = out / f"{spec['id']}.mp4"
+        for p in (*stale_renders, final_mp4):
+            if p.exists():
+                print(f"  [cache-bust] removing stale {p.relative_to(out)}")
+                p.unlink()
+
     # 1. Fetch + download raw stock footage. This step is duration-
     # independent (raw clips are downloaded at their native length), so
     # it can run before we know the audio-anchored scene duration.
@@ -354,6 +396,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             if ok and word_timings:
                 word_timings_by_scene[scene["id"]] = word_timings
+            if ok:
+                (audio_dir / f"{scene['id']}.hash").write_text(
+                    script_hashes[scene["id"]], encoding="utf-8"
+                )
 
         if not audio_path.exists():
             print(

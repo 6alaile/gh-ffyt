@@ -194,11 +194,11 @@ def main(argv: list[str] | None = None) -> int:
         # 5. Compose.
         from pipeline.compose import main as compose_main
         rc = compose_main([
-            str(spec_out),
-            str(args.output_dir),
-            args.hyperframes_version,
-            args.quality,
-            str(args.xfade),
+            "--spec", str(spec_out),
+            "--output-dir", str(args.output_dir),
+            "--hyperframes-version", str(args.hyperframes_version),
+            "--quality", str(args.quality),
+            "--xfade", str(args.xfade),
         ])
         if rc != 0:
             return rc
