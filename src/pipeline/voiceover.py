@@ -23,6 +23,7 @@ TTS knobs come from `TTSConfig.from_env()` (see pipeline.config).
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 from typing import Any, TypedDict
@@ -76,6 +77,54 @@ def probe_audio_duration_seconds(path: Path) -> float | None:
         return duration if duration > 0 else None
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Cache-busting for cached audio
+#
+# Audio files are cached on disk as `<audio_dir>/<scene_id>.mp3`, keyed
+# only by scene id. If a brief gets edited and re-run against a spec
+# that reuses the same `spec["id"]` (and therefore the same output
+# directory), a stale mp3 from the *previous* version of the script
+# would otherwise be silently reused — including for duration
+# anchoring, which then measures the wrong audio entirely. A sidecar
+# `.hash` file records which script text produced the cached mp3, so
+# compose.py can detect the mismatch and regenerate instead of
+# skipping.
+# ─────────────────────────────────────────────────────────────────────
+def script_hash(script: str) -> str:
+    """Short, stable content hash of a scene's voiceover script."""
+    return hashlib.sha256(script.encode("utf-8")).hexdigest()[:16]
+
+
+def _hash_path(audio_path: Path) -> Path:
+    return audio_path.parent / f"{audio_path.name}.hash"
+
+
+def is_cached_audio_stale(audio_path: Path, script: str) -> bool:
+    """True if `audio_path` exists but doesn't match `script`'s hash.
+
+    Also true (safe default) if the audio exists with no recorded hash
+    at all — e.g. audio generated before this cache-busting existed —
+    since we can't confirm it matches the current script.
+    """
+    if not audio_path.exists():
+        return False
+    hash_path = _hash_path(audio_path)
+    if not hash_path.exists():
+        return True
+    return hash_path.read_text(encoding="utf-8").strip() != script_hash(script)
+
+
+def write_audio_hash(audio_path: Path, script: str) -> None:
+    """Record the script hash for a freshly generated audio file."""
+    _hash_path(audio_path).write_text(script_hash(script), encoding="utf-8")
+
+
+def purge_stale_audio(audio_path: Path) -> None:
+    """Delete a stale cached mp3 + its hash sidecar so it gets regenerated."""
+    audio_path.unlink(missing_ok=True)
+    _hash_path(audio_path).unlink(missing_ok=True)
 
 
 # Edge TTS reports offset/duration in 100-nanosecond units (same as SSML).

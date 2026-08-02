@@ -20,7 +20,6 @@ Reads env vars only via pipeline.config — no `os.environ.get` here.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import shutil
 import subprocess
@@ -38,7 +37,10 @@ from pipeline.schema import SpecError, load_and_validate
 from pipeline.voiceover import (
     AUDIO_PADDING_SEC,
     generate_voiceover,
+    is_cached_audio_stale,
     probe_audio_duration_seconds,
+    purge_stale_audio,
+    write_audio_hash,
 )
 
 
@@ -280,6 +282,32 @@ def _mirror_assets_to_scene(out: Path, scene_proj: Path, scene_id: str) -> None:
         pass
 
 
+def _stored_render_duration(mp4_path: Path) -> float | None:
+    """Read back the duration_s a rendered scene MP4 was captured at.
+
+    Returns None if there's no sidecar (e.g. the MP4 predates this
+    tracking, or was produced by an older pipeline version) — callers
+    should treat that as "unknown, assume stale" rather than skip.
+    """
+    sidecar = mp4_path.parent / f"{mp4_path.name}.duration"
+    if not sidecar.exists():
+        return None
+    try:
+        return float(sidecar.read_text(encoding="utf-8").strip())
+    except ValueError:
+        return None
+
+
+def _write_render_duration(mp4_path: Path, duration_s: float) -> None:
+    sidecar = mp4_path.parent / f"{mp4_path.name}.duration"
+    sidecar.write_text(f"{duration_s:.3f}", encoding="utf-8")
+
+
+def _purge_render(mp4_path: Path) -> None:
+    mp4_path.unlink(missing_ok=True)
+    (mp4_path.parent / f"{mp4_path.name}.duration").unlink(missing_ok=True)
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────
@@ -309,47 +337,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Output:  {out}")
     print(f"Scenes:  {len(spec['scenes'])}")
     print(f"Aspect:  {render_cfg.aspect_ratio} ({render_cfg.stage_width}x{render_cfg.stage_height})\n")
-
-    # 0. Cache-busting: audio/clip caching below is keyed by scene id
-    # alone, so if a scene's `script` text is edited between runs (e.g.
-    # re-writing a brief and regenerating specs/<id>.json with the same
-    # scene ids) the stale .mp3 — and the clip trimmed to *its* length —
-    # would otherwise be silently reused, undoing the audio-anchored
-    # duration fix below. Each scene's script is hashed and compared
-    # against a sidecar `<id>.hash` written the last time its audio was
-    # generated; a mismatch (or first run) purges that scene's cached
-    # audio/clip/raw files so everything regenerates from the current
-    # text. If any scene's script changed, the per-scene render MP4s and
-    # the final crossfade-concat output are wiped too, since a duration
-    # change anywhere shifts every downstream timing.
-    any_script_changed = False
-    script_hashes: dict[str, str] = {}
-    for scene in spec["scenes"]:
-        content_hash = hashlib.sha256(scene["script"].encode("utf-8")).hexdigest()[:16]
-        hash_path = audio_dir / f"{scene['id']}.hash"
-        stored_hash = hash_path.read_text().strip() if hash_path.exists() else None
-        script_hashes[scene["id"]] = content_hash
-        if stored_hash == content_hash:
-            continue
-        any_script_changed = True
-        stale = [
-            audio_dir / f"{scene['id']}.mp3",
-            clips_dir / f"{scene['id']}.mp4",
-            clips_dir / f"{scene['id']}_raw.mp4",
-        ]
-        removed = [p.name for p in stale if p.exists()]
-        for p in stale:
-            p.unlink(missing_ok=True)
-        if removed:
-            print(f"  [cache-bust] {scene['id']}: script changed — purged {', '.join(removed)}")
-
-    if any_script_changed:
-        stale_renders = list(render_dir.glob("scene_*.mp4"))
-        final_mp4 = out / f"{spec['id']}.mp4"
-        for p in (*stale_renders, final_mp4):
-            if p.exists():
-                print(f"  [cache-bust] removing stale {p.relative_to(out)}")
-                p.unlink()
 
     # 1. Fetch + download raw stock footage. This step is duration-
     # independent (raw clips are downloaded at their native length), so
@@ -384,6 +371,14 @@ def main(argv: list[str] | None = None) -> int:
     word_timings_by_scene: dict[str, list[dict[str, Any]]] = {}
     for scene in spec["scenes"]:
         audio_path = audio_dir / f"{scene['id']}.mp3"
+
+        if is_cached_audio_stale(audio_path, scene["script"]):
+            print(
+                f"  [stale] audio {audio_path.name} doesn't match the current "
+                f"scene script — purging and regenerating"
+            )
+            purge_stale_audio(audio_path)
+
         if audio_path.exists():
             print(f"  [skip] audio {audio_path.name}")
         else:
@@ -396,10 +391,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if ok and word_timings:
                 word_timings_by_scene[scene["id"]] = word_timings
-            if ok:
-                (audio_dir / f"{scene['id']}.hash").write_text(
-                    script_hashes[scene["id"]], encoding="utf-8"
-                )
+            if audio_path.exists():
+                write_audio_hash(audio_path, scene["script"])
 
         if not audio_path.exists():
             print(
@@ -478,33 +471,57 @@ def main(argv: list[str] | None = None) -> int:
     # Chrome-driven capture process, so concurrent renders scale near-
     # linearly up to the CI runner's headroom. Default `RenderConfig`
     # is 3 — bump on larger runners, lower on 7 GB boxes.
+    #
+    # A rendered scene MP4 was captured at whatever `duration_s` was in
+    # effect the moment it was rendered. If that duration later changes
+    # — a re-run lands on a different audio-anchored length, the brief
+    # gets regenerated, a scene shifts index — mere file existence is
+    # not a valid cache key: the stale MP4 (e.g. captured at 55s) would
+    # be skipped and reused forever even though the HTML underneath now
+    # says 8.2s. `_stored_render_duration` sidecars the duration each
+    # render was captured at so a mismatch triggers a purge + re-render.
     rendered_any = False
-    render_jobs: list[tuple[Path, Path]] = []
+    any_render_stale = False
+    render_jobs: list[tuple[Path, Path, float]] = []
     for i, scene in enumerate(spec["scenes"], 1):
         scene_proj = html_dir / f"scene_{i:02d}_{scene['kind']}"
         mp4_path = render_dir / f"scene_{i:02d}_{scene['kind']}.mp4"
+        duration_s = scene["duration_s"]
+
+        if mp4_path.exists():
+            stored = _stored_render_duration(mp4_path)
+            if stored is None or abs(stored - duration_s) > 0.01:
+                was = f"{stored}s" if stored is not None else "an unknown duration"
+                print(
+                    f"  [stale] render {mp4_path.name} was captured at {was}, "
+                    f"current scene duration_s={duration_s} — purging and re-rendering"
+                )
+                _purge_render(mp4_path)
+                any_render_stale = True
+
         if mp4_path.exists():
             print(f"  [skip] render {mp4_path.name}")
             rendered_any = True
             continue
-        render_jobs.append((scene_proj, mp4_path))
+        render_jobs.append((scene_proj, mp4_path, duration_s))
 
     if render_jobs:
         max_parallel = max(1, min(render_cfg.parallel, len(render_jobs)))
         print(f"  rendering {len(render_jobs)} scenes with {max_parallel} parallel workers")
         with ThreadPoolExecutor(max_workers=max_parallel) as pool:
             futures = {
-                pool.submit(run_hyperframes, proj, mp4, args.hyperframes_version, args.quality): mp4
-                for proj, mp4 in render_jobs
+                pool.submit(run_hyperframes, proj, mp4, args.hyperframes_version, args.quality): (mp4, duration_s)
+                for proj, mp4, duration_s in render_jobs
             }
             for fut in as_completed(futures):
-                mp4 = futures[fut]
+                mp4, duration_s = futures[fut]
                 if not fut.exception():
                     print(f"  ok render {mp4.name}")
                 else:
                     print(f"  ! render {mp4.name} raised: {fut.exception()}")
                 if mp4.exists():
                     rendered_any = True
+                    _write_render_duration(mp4, duration_s)
 
     if not rendered_any:
         print("FAIL: no rendered scenes (HyperFrames likely failed for every scene)", file=sys.stderr)
@@ -515,7 +532,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # 6. Final xfade concat.
+    # If any scene render was purged/regenerated this run, a previously
+    # concatenated final output is stale too (it was stitched from the
+    # old MP4s) — purge it so it gets rebuilt from the current renders.
     final = out / f"{spec['id']}.mp4"
+    if final.exists() and (any_render_stale or render_jobs):
+        print(f"  [stale] final {final.name} was concatenated from now-outdated scene renders — purging")
+        final.unlink()
     scene_mp4s = sorted(render_dir.glob("scene_*.mp4"))
     if not scene_mp4s:
         print("FAIL: no rendered scenes to concatenate", file=sys.stderr)
