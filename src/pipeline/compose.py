@@ -62,14 +62,19 @@ def _read_base_template() -> str:
     return resource_files("pipeline.resources").joinpath("base.html").read_text(encoding="utf-8")
 
 
-def render_scene_html(scene: dict[str, Any], spec: dict[str, Any], palette: dict[str, str]) -> str:
+def render_scene_html(
+    scene: dict[str, Any],
+    spec: dict[str, Any],
+    palette: dict[str, str],
+    render_cfg: RenderConfig,
+) -> str:
     """Fill the base template with per-scene slots.
 
     Uses simple string replacement rather than str.format so that
     JavaScript blocks (which contain literal `{}`) and CSS (which
     contains `{` and `}` in selectors and at-rules) survive intact.
     """
-    css, content, anim = render_kind(scene)
+    css, content, anim, subtitle_html = render_kind(scene)
     base = _read_base_template()
     pill_html = f'<span class="pill">{scene["pill"]}</span>' if scene.get("pill") else ""
     top_label = scene.get("top_label", "LIVE")
@@ -85,6 +90,9 @@ def render_scene_html(scene: dict[str, Any], spec: dict[str, Any], palette: dict
         ("__RULE__", palette["rule"]),
         ("__MUTED__", palette["muted"]),
         ("__DANGER__", palette["danger"]),
+        ("__STAGE_WIDTH__", str(render_cfg.stage_width)),
+        ("__STAGE_HEIGHT__", str(render_cfg.stage_height)),
+        ("__ASPECT_RATIO__", render_cfg.aspect_ratio),
         ("__KIND_CSS__", css),
         ("__COMPOSITION_ID__", composition_id),
         ("__DURATION__", str(scene["duration_s"])),
@@ -94,6 +102,7 @@ def render_scene_html(scene: dict[str, Any], spec: dict[str, Any], palette: dict
         ("__BOTTOM_LABEL__", bottom_label),
         ("__PILL_HTML__", pill_html),
         ("__KIND_CONTENT__", content),
+        ("__SUBTITLE_HTML__", subtitle_html),
         ("__KIND_ANIM__", anim),
     ]
     for needle, value in replacements:
@@ -288,11 +297,13 @@ def main(argv: list[str] | None = None) -> int:
     palette = {**DEFAULT_PALETTE, **(spec.get("palette") or {})}
     tts = {**DEFAULT_TTS, **(spec.get("tts") or {})}
     tts_cfg = TTSConfig.from_env()
+    render_cfg = RenderConfig.from_env()
     voice_id = tts.get("voice_id") or tts_cfg.elevenlabs_voice_id
 
     print(f"Spec:    {args.spec}")
     print(f"Output:  {out}")
-    print(f"Scenes:  {len(spec['scenes'])}\n")
+    print(f"Scenes:  {len(spec['scenes'])}")
+    print(f"Aspect:  {render_cfg.aspect_ratio} ({render_cfg.stage_width}x{render_cfg.stage_height})\n")
 
     # 1+2. Fetch + re-encode stock footage.
     for scene in spec["scenes"]:
@@ -337,29 +348,37 @@ def main(argv: list[str] | None = None) -> int:
             "missing visuals until footage is re-fetched."
         )
 
-    # 3. Voiceover.
-    # Edge TTS is the default (free, no key). If TTS_ALLOW_ELEVENLABS=1
-    # and edge-tts fails for a scene, falls back to ElevenLabs. Dormant
-    # by default because the ElevenLabs free tier blocks library voices.
+    # 3. Voiceover (+ word-level timings for kinetic subtitles).
+    word_timings_by_scene: dict[str, list[dict[str, Any]]] = {}
     for scene in spec["scenes"]:
         audio_path = audio_dir / f"{scene['id']}.mp3"
         if audio_path.exists():
             print(f"  [skip] audio {audio_path.name}")
             continue
-        generate_voiceover(
+        ok, word_timings = generate_voiceover(
             scene["script"],
             audio_path,
             voice_id,
             tts,
             allow_elevenlabs=tts_cfg.allow_elevenlabs,
         )
+        if ok and word_timings:
+            word_timings_by_scene[scene["id"]] = word_timings
 
     # 4. Per-scene HTML.
     for i, scene in enumerate(spec["scenes"], 1):
         scene_proj = html_dir / f"scene_{i:02d}_{scene['kind']}"
         scene_proj.mkdir(parents=True, exist_ok=True)
         html_path = scene_proj / "index.html"
-        html_path.write_text(render_scene_html(scene, spec, palette), encoding="utf-8")
+        enriched_scene = {
+            **scene,
+            "aspect_ratio": render_cfg.aspect_ratio,
+            "word_timings": word_timings_by_scene.get(scene["id"], []),
+        }
+        html_path.write_text(
+            render_scene_html(enriched_scene, spec, palette, render_cfg),
+            encoding="utf-8",
+        )
         _mirror_assets_to_scene(out, scene_proj, scene["id"])
 
     # 5. Per-scene render.
@@ -379,8 +398,7 @@ def main(argv: list[str] | None = None) -> int:
         render_jobs.append((scene_proj, mp4_path))
 
     if render_jobs:
-        cfg = RenderConfig.from_env()
-        max_parallel = max(1, min(cfg.parallel, len(render_jobs)))
+        max_parallel = max(1, min(render_cfg.parallel, len(render_jobs)))
         print(f"  rendering {len(render_jobs)} scenes with {max_parallel} parallel workers")
         with ThreadPoolExecutor(max_workers=max_parallel) as pool:
             futures = {

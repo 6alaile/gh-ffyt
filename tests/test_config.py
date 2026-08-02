@@ -50,8 +50,12 @@ def test_tts_config_allow_elevenlabs_only_on_exact_one(monkeypatch: pytest.Monke
 
 def test_render_config_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RENDER_PARALLEL", raising=False)
+    monkeypatch.delenv("RENDER_ASPECT_RATIO", raising=False)
     cfg = RenderConfig.from_env()
     assert cfg.parallel == 3
+    assert cfg.aspect_ratio == "16:9"
+    assert cfg.stage_width == 1920
+    assert cfg.stage_height == 1080
 
 
 def test_render_config_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,6 +71,19 @@ def test_render_config_clamps_to_minimum_one(monkeypatch: pytest.MonkeyPatch) ->
 def test_render_config_falls_back_on_junk(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RENDER_PARALLEL", "not-a-number")
     assert RenderConfig.from_env().parallel == 3
+
+
+def test_render_config_aspect_ratio_9_16(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RENDER_ASPECT_RATIO", "9:16")
+    cfg = RenderConfig.from_env()
+    assert cfg.aspect_ratio == "9:16"
+    assert cfg.stage_width == 1080
+    assert cfg.stage_height == 1920
+
+
+def test_render_config_invalid_aspect_ratio_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RENDER_ASPECT_RATIO", "4:3")
+    assert RenderConfig.from_env().aspect_ratio == "16:9"
 
 
 def test_footage_keys_default_none(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -22,12 +22,133 @@ stay in sync.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 def cls(sid: str) -> str:
     """CSS-safe class prefix for a scene id. Scene ids may start with a
     digit (e.g. "01_hook"), which is illegal as a CSS identifier start;
     we prefix with "s-" to keep all generated selectors valid."""
     return f"s-{sid}"
+
+
+def _aspect_ratio(scene: dict[str, Any]) -> str:
+    return scene.get("aspect_ratio") or "16:9"
+
+
+def _aspect_layout_css(scene: dict[str, Any]) -> str:
+    """Stack multi-column layouts vertically for 9:16 Shorts."""
+    if _aspect_ratio(scene) != "9:16":
+        return ""
+
+    sid = cls(scene["id"])
+    kind = scene["kind"]
+    rules: list[str] = [
+        "body[data-aspect-ratio=\"9:16\"] #scene1 .scene-content {",
+        "  flex-direction: column !important;",
+        "  align-items: stretch !important;",
+        "  padding: 80px 48px !important;",
+        "  gap: 40px !important;",
+        "}",
+    ]
+
+    if kind == "scale":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-left {{ width: 100%; }}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-right {{",
+            "  flex: 1 1 auto !important; width: 100%;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-headline {{ font-size: 96px; }}",
+        ])
+    elif kind == "record":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-counter-wrap {{",
+            "  flex: 1 1 auto !important; width: 100%;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-right {{ width: 100%; }}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-counter {{ font-size: 220px; }}",
+        ])
+    elif kind == "grid":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-grid {{",
+            "  grid-template-columns: 1fr !important;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-headline {{ font-size: 72px; }}",
+        ])
+    elif kind == "split":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-left {{ width: 100%; }}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-right {{",
+            "  flex: 1 1 auto !important; width: 100%; min-height: 240px;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-headline {{ font-size: 88px; }}",
+        ])
+
+    return "\n      ".join(rules)
+
+
+def _kinetic_subtitles(scene: dict[str, Any]) -> tuple[str, str, str]:
+    """Build CSS, HTML, and GSAP for word-synced kinetic subtitles.
+
+    Uses `scene["word_timings"]` from Edge TTS WordBoundary events.
+    Returns empty strings when timings are missing.
+    """
+    word_timings: list[dict[str, Any]] = scene.get("word_timings") or []
+    if not word_timings:
+        return "", "", ""
+
+    sid = cls(scene["id"])
+    spans = "".join(
+        f'<span class="word {sid}-word" data-i="{i}">{w["word"]}</span>'
+        for i, w in enumerate(word_timings)
+    )
+    css = f"""
+      #scene1 .{sid}-subtitles {{
+        position: absolute;
+        left: 48px; right: 48px;
+        bottom: 96px;
+        z-index: 4;
+        text-align: center;
+        font-size: clamp(24px, 2.8vw, 36px);
+        line-height: 1.45;
+        pointer-events: none;
+      }}
+      #scene1 .{sid}-subtitles .word {{
+        display: inline;
+        opacity: 0.35;
+        color: var(--fg);
+        margin-right: 0.28em;
+        transition: none;
+      }}
+      body[data-aspect-ratio="9:16"] #scene1 .{sid}-subtitles {{
+        bottom: 112px;
+        font-size: clamp(22px, 3.2vw, 30px);
+        padding: 0 12px;
+      }}
+    """
+    html = f'<div class="kinetic-subtitles {sid}-subtitles">{spans}</div>'
+
+    anim_parts = [
+        f'gsap.set(".{sid}-subtitles .word", {{ opacity: 0.35, color: "var(--fg)" }});',
+    ]
+    for i, w in enumerate(word_timings):
+        start_s = max(0.0, w.get("start", 0) / 1000.0)
+        word_dur = max(0.05, (w.get("end", 0) - w.get("start", 0)) / 1000.0)
+        highlight_dur = min(0.25, word_dur * 0.5)
+        anim_parts.append(
+            f'tl.to(".{sid}-word[data-i=\\"{i}\\"]", '
+            f'{{ opacity: 1, color: "var(--accent)", duration: {highlight_dur:.3f}, '
+            f'ease: "power2.out" }}, {start_s:.3f});'
+        )
+        if i > 0:
+            prev = i - 1
+            anim_parts.append(
+                f'tl.to(".{sid}-word[data-i=\\"{prev}\\"]", '
+                f'{{ opacity: 0.45, color: "var(--fg)", duration: 0.12, ease: "power2.in" }}, '
+                f'{start_s:.3f});'
+            )
+
+    return css, html, "\n      ".join(anim_parts)
 
 
 def hook(scene: dict) -> tuple[str, str, str]:
@@ -564,9 +685,16 @@ RENDERERS = {
 }
 
 
-def render_kind(scene: dict) -> tuple[str, str, str]:
-    """Return (css, content, anim) for a given scene."""
+def render_kind(scene: dict) -> tuple[str, str, str, str]:
+    """Return (css, content, anim, subtitle_html) for a given scene."""
     kind = scene["kind"]
     if kind not in RENDERERS:
         raise ValueError(f"unknown kind {kind!r}")
-    return RENDERERS[kind](scene)
+    css, content, anim = RENDERERS[kind](scene)
+    css = css + _aspect_layout_css(scene)
+    sub_css, sub_html, sub_anim = _kinetic_subtitles(scene)
+    if sub_css:
+        css = css + sub_css
+    if sub_anim:
+        anim = anim + "\n      " + sub_anim
+    return css, content, anim, sub_html

@@ -51,7 +51,7 @@ md2yt = "pipeline.cli:main"
 md2yt-ui = "pipeline.ui:main"
 
 [project.urls]
-Homepage = "https://github.com/USER/MD2YT"
+Homepage = "https://github.com/6alaile/gh-ffyt"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

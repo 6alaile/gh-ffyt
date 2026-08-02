@@ -46,6 +46,8 @@
         --rule: __RULE__;
         --muted: __MUTED__;
         --danger: __DANGER__;
+        --stage-width: __STAGE_WIDTH__px;
+        --stage-height: __STAGE_HEIGHT__px;
       }
 
       html, body {
@@ -56,7 +58,8 @@
         font-size: 28px; line-height: 1.35;
         letter-spacing: 0.005em;
         overflow: hidden;
-        width: 1920px; height: 1080px;
+        width: var(--stage-width);
+        height: var(--stage-height);
       }
 
       .display, .display * {
@@ -75,14 +78,16 @@
 
       .scene {
         position: absolute; inset: 0;
-        width: 1920px; height: 1080px;
+        width: var(--stage-width);
+        height: var(--stage-height);
         overflow: hidden; background: var(--bg);
         z-index: 1;
       }
 
       .scene-video {
         position: absolute; inset: 0;
-        width: 1920px; height: 1080px;
+        width: var(--stage-width);
+        height: var(--stage-height);
         object-fit: cover; z-index: 1;
         filter: brightness(0.55) saturate(0.7);
       }
@@ -146,12 +151,12 @@
       __KIND_CSS__
     </style>
   </head>
-  <body>
+  <body data-aspect-ratio="__ASPECT_RATIO__">
     <div
       id="root"
       data-composition-id="__COMPOSITION_ID__"
-      data-width="1920"
-      data-height="1080"
+      data-width="__STAGE_WIDTH__"
+      data-height="__STAGE_HEIGHT__"
       data-start="0"
       data-duration="__DURATION__"
     >
@@ -173,6 +178,7 @@
         <div class="scene-content">
           __KIND_CONTENT__
         </div>
+        __SUBTITLE_HTML__
         <div class="bottom-bar">
           <span>__BOTTOM_LABEL__</span>
           __PILL_HTML__

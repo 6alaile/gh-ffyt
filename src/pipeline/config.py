@@ -7,7 +7,7 @@ Every other module reads env vars through one of these dataclasses via
 Grouped by concern:
   - FootageKeys    — stock-footage API keys (Pixabay, Pexels).
   - TTSConfig      — voiceover knobs (Edge TTS defaults, ElevenLabs toggle).
-  - RenderConfig   — composer knobs (parallelism).
+  - RenderConfig   — composer knobs (parallelism, aspect ratio).
   - YouTubeSecrets — base64-encoded OAuth credentials for upload.
   - YouTubeDefaults — one-shot env-var overrides + paths for upload.
 
@@ -19,6 +19,15 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal
+
+AspectRatio = Literal["16:9", "9:16"]
+
+# Stage pixel dimensions keyed by aspect ratio. Used by compose + base.html.
+STAGE_DIMENSIONS: dict[AspectRatio, tuple[int, int]] = {
+    "16:9": (1920, 1080),
+    "9:16": (1080, 1920),
+}
 
 
 def _env(name: str) -> str | None:
@@ -83,8 +92,9 @@ class TTSConfig:
 # ─────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class RenderConfig:
-    """Composer knobs. Today: scene-render parallelism."""
+    """Composer knobs: scene-render parallelism and output aspect ratio."""
     parallel: int
+    aspect_ratio: AspectRatio
 
     @classmethod
     def from_env(cls) -> "RenderConfig":
@@ -92,7 +102,24 @@ class RenderConfig:
             parallel = int(_env("RENDER_PARALLEL") or "3")
         except ValueError:
             parallel = 3
-        return cls(parallel=max(1, parallel))
+
+        raw_ratio = (_env("RENDER_ASPECT_RATIO") or "16:9").strip()
+        aspect_ratio: AspectRatio = raw_ratio if raw_ratio in STAGE_DIMENSIONS else "16:9"
+        if raw_ratio not in STAGE_DIMENSIONS:
+            print(
+                f"  ! RENDER_ASPECT_RATIO={raw_ratio!r} is invalid; "
+                f"using 16:9 (allowed: {', '.join(STAGE_DIMENSIONS)})"
+            )
+
+        return cls(parallel=max(1, parallel), aspect_ratio=aspect_ratio)
+
+    @property
+    def stage_width(self) -> int:
+        return STAGE_DIMENSIONS[self.aspect_ratio][0]
+
+    @property
+    def stage_height(self) -> int:
+        return STAGE_DIMENSIONS[self.aspect_ratio][1]
 
 
 # ─────────────────────────────────────────────────────────────────────
