@@ -23,6 +23,7 @@ TTS knobs come from `TTSConfig.from_env()` (see pipeline.config).
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -36,6 +37,45 @@ class WordTiming(TypedDict):
     word: str
     start: int
     end: int
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Audio-duration anchoring
+#
+# Scene durations in the spec are editorial estimates. The real timing
+# constraint is however long the generated voiceover actually runs, so
+# compose.py measures the rendered audio file and overwrites
+# scene["duration_s"] with it (see `probe_audio_duration_seconds`).
+# This padding is added on top so speech has a moment of silence
+# before the scene cuts/crossfades into the next one.
+# ─────────────────────────────────────────────────────────────────────
+AUDIO_PADDING_SEC = 0.2
+
+
+def probe_audio_duration_seconds(path: Path) -> float | None:
+    """Measure the exact duration (seconds) of an audio file via ffprobe.
+
+    Returns None if ffprobe is missing, times out, or the file can't be
+    probed (e.g. zero-byte / corrupt download) — callers should fall
+    back to the spec's authored `duration_s` in that case rather than
+    fail the scene outright.
+    """
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        duration = float(r.stdout.strip())
+        return duration if duration > 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
 
 
 # Edge TTS reports offset/duration in 100-nanosecond units (same as SSML).
