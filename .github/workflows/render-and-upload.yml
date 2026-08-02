@@ -2,7 +2,7 @@ name: Render Video
 
 on:
   push:
-    branches: [main, split]
+    branches: [main]
     tags: ['v*']
     # Path filter: only auto-render on source/spec/doc changes. Brief
     # uploads, Vercel UI commits, and front-end edits are dispatched
