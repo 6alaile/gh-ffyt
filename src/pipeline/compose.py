@@ -34,7 +34,14 @@ from pipeline.defaults import DEFAULT_PALETTE, DEFAULT_TTS, REENCODE_FFMPEG
 from pipeline.fetchers import download_file, fetch_clip
 from pipeline.renderers import render_kind
 from pipeline.schema import SpecError, load_and_validate
-from pipeline.voiceover import generate_voiceover
+from pipeline.voiceover import (
+    AUDIO_PADDING_SEC,
+    generate_voiceover,
+    is_cached_audio_stale,
+    probe_audio_duration_seconds,
+    purge_stale_audio,
+    write_audio_hash,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -62,14 +69,19 @@ def _read_base_template() -> str:
     return resource_files("pipeline.resources").joinpath("base.html").read_text(encoding="utf-8")
 
 
-def render_scene_html(scene: dict[str, Any], spec: dict[str, Any], palette: dict[str, str]) -> str:
+def render_scene_html(
+    scene: dict[str, Any],
+    spec: dict[str, Any],
+    palette: dict[str, str],
+    render_cfg: RenderConfig,
+) -> str:
     """Fill the base template with per-scene slots.
 
     Uses simple string replacement rather than str.format so that
     JavaScript blocks (which contain literal `{}`) and CSS (which
     contains `{` and `}` in selectors and at-rules) survive intact.
     """
-    css, content, anim = render_kind(scene)
+    css, content, anim, subtitle_html = render_kind(scene)
     base = _read_base_template()
     pill_html = f'<span class="pill">{scene["pill"]}</span>' if scene.get("pill") else ""
     top_label = scene.get("top_label", "LIVE")
@@ -85,6 +97,9 @@ def render_scene_html(scene: dict[str, Any], spec: dict[str, Any], palette: dict
         ("__RULE__", palette["rule"]),
         ("__MUTED__", palette["muted"]),
         ("__DANGER__", palette["danger"]),
+        ("__STAGE_WIDTH__", str(render_cfg.stage_width)),
+        ("__STAGE_HEIGHT__", str(render_cfg.stage_height)),
+        ("__ASPECT_RATIO__", render_cfg.aspect_ratio),
         ("__KIND_CSS__", css),
         ("__COMPOSITION_ID__", composition_id),
         ("__DURATION__", str(scene["duration_s"])),
@@ -94,6 +109,7 @@ def render_scene_html(scene: dict[str, Any], spec: dict[str, Any], palette: dict
         ("__BOTTOM_LABEL__", bottom_label),
         ("__PILL_HTML__", pill_html),
         ("__KIND_CONTENT__", content),
+        ("__SUBTITLE_HTML__", subtitle_html),
         ("__KIND_ANIM__", anim),
     ]
     for needle, value in replacements:
@@ -266,6 +282,32 @@ def _mirror_assets_to_scene(out: Path, scene_proj: Path, scene_id: str) -> None:
         pass
 
 
+def _stored_render_duration(mp4_path: Path) -> float | None:
+    """Read back the duration_s a rendered scene MP4 was captured at.
+
+    Returns None if there's no sidecar (e.g. the MP4 predates this
+    tracking, or was produced by an older pipeline version) — callers
+    should treat that as "unknown, assume stale" rather than skip.
+    """
+    sidecar = mp4_path.parent / f"{mp4_path.name}.duration"
+    if not sidecar.exists():
+        return None
+    try:
+        return float(sidecar.read_text(encoding="utf-8").strip())
+    except ValueError:
+        return None
+
+
+def _write_render_duration(mp4_path: Path, duration_s: float) -> None:
+    sidecar = mp4_path.parent / f"{mp4_path.name}.duration"
+    sidecar.write_text(f"{duration_s:.3f}", encoding="utf-8")
+
+
+def _purge_render(mp4_path: Path) -> None:
+    mp4_path.unlink(missing_ok=True)
+    (mp4_path.parent / f"{mp4_path.name}.duration").unlink(missing_ok=True)
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────
@@ -288,35 +330,106 @@ def main(argv: list[str] | None = None) -> int:
     palette = {**DEFAULT_PALETTE, **(spec.get("palette") or {})}
     tts = {**DEFAULT_TTS, **(spec.get("tts") or {})}
     tts_cfg = TTSConfig.from_env()
+    render_cfg = RenderConfig.from_env()
     voice_id = tts.get("voice_id") or tts_cfg.elevenlabs_voice_id
 
     print(f"Spec:    {args.spec}")
     print(f"Output:  {out}")
-    print(f"Scenes:  {len(spec['scenes'])}\n")
+    print(f"Scenes:  {len(spec['scenes'])}")
+    print(f"Aspect:  {render_cfg.aspect_ratio} ({render_cfg.stage_width}x{render_cfg.stage_height})\n")
 
-    # 1+2. Fetch + re-encode stock footage.
+    # 1. Fetch + download raw stock footage. This step is duration-
+    # independent (raw clips are downloaded at their native length), so
+    # it can run before we know the audio-anchored scene duration.
+    raw_clips: dict[str, Path] = {}
     for scene in spec["scenes"]:
         clip_path = clips_dir / f"{scene['id']}.mp4"
-        if not clip_path.exists():
-            url = fetch_clip(scene)
-            if not url:
-                query = scene.get("query") or scene["id"]
-                src = scene.get("source", "pixabay")
-                print(
-                    f"  ! no clip for {scene['id']} "
-                    f"(source={src}, query={query!r}, min_width={scene.get('min_width', 1280)}) — "
-                    f"scene will render without background footage"
-                )
-                continue
-            raw = clips_dir / f"{scene['id']}_raw.mp4"
-            if not download_file(url, raw, label=scene["id"]):
-                continue
-            reencode_clip(raw, clip_path, scene["duration_s"])
-            raw.unlink(missing_ok=True)
-        else:
-            print(f"  [skip] clip {scene['id']}.mp4 exists")
+        if clip_path.exists():
+            print(f"  [skip] clip {clip_path.name} exists")
+            continue
+        url = fetch_clip(scene)
+        if not url:
+            query = scene.get("query") or scene["id"]
+            src = scene.get("source", "pixabay")
+            print(
+                f"  ! no clip for {scene['id']} "
+                f"(source={src}, query={query!r}, min_width={scene.get('min_width', 1280)}) — "
+                f"scene will render without background footage"
+            )
+            continue
+        raw = clips_dir / f"{scene['id']}_raw.mp4"
+        if not download_file(url, raw, label=scene["id"]):
+            continue
+        raw_clips[scene["id"]] = raw
 
-    # 2b. Sanity-check: every scene that made it into the render queue
+    # 2. Voiceover (+ word-level timings for kinetic subtitles), then
+    # anchor each scene's duration to the *actual* generated audio
+    # length. This runs before the re-encode/trim step below so the
+    # background clip is trimmed to the real speech length instead of
+    # the spec's editorial `duration_s` estimate — otherwise the video
+    # keeps rolling in silence after the voiceover ends.
+    word_timings_by_scene: dict[str, list[dict[str, Any]]] = {}
+    for scene in spec["scenes"]:
+        audio_path = audio_dir / f"{scene['id']}.mp3"
+
+        if is_cached_audio_stale(audio_path, scene["script"]):
+            print(
+                f"  [stale] audio {audio_path.name} doesn't match the current "
+                f"scene script — purging and regenerating"
+            )
+            purge_stale_audio(audio_path)
+
+        if audio_path.exists():
+            print(f"  [skip] audio {audio_path.name}")
+        else:
+            ok, word_timings = generate_voiceover(
+                scene["script"],
+                audio_path,
+                voice_id,
+                tts,
+                allow_elevenlabs=tts_cfg.allow_elevenlabs,
+            )
+            if ok and word_timings:
+                word_timings_by_scene[scene["id"]] = word_timings
+            if audio_path.exists():
+                write_audio_hash(audio_path, scene["script"])
+
+        if not audio_path.exists():
+            print(
+                f"  ! no audio for {scene['id']} — keeping spec duration_s="
+                f"{scene['duration_s']}"
+            )
+            continue
+
+        actual = probe_audio_duration_seconds(audio_path)
+        if actual is None:
+            print(
+                f"  ! could not probe audio duration for {audio_path.name} — "
+                f"keeping spec duration_s={scene['duration_s']}"
+            )
+            continue
+
+        spec_duration = scene["duration_s"]
+        scene["duration_s"] = round(actual + AUDIO_PADDING_SEC, 3)
+        print(
+            f"  duration {scene['id']}: spec={spec_duration}s -> "
+            f"audio-anchored={scene['duration_s']}s "
+            f"(audio {actual:.3f}s + {AUDIO_PADDING_SEC}s padding)"
+        )
+
+    # 3. Re-encode/trim stock footage to each scene's (now audio-
+    # anchored) duration.
+    for scene in spec["scenes"]:
+        clip_path = clips_dir / f"{scene['id']}.mp4"
+        if clip_path.exists():
+            continue
+        raw = raw_clips.get(scene["id"])
+        if raw is None:
+            continue
+        reencode_clip(raw, clip_path, scene["duration_s"])
+        raw.unlink(missing_ok=True)
+
+    # 3b. Sanity-check: every scene that made it into the render queue
     # must have a clip on disk. HyperFrames' skip-guard only checks the
     # render MP4 (compose.py:348), so a missing clip can ride through
     # a previous run and surface as the misleading
@@ -337,29 +450,20 @@ def main(argv: list[str] | None = None) -> int:
             "missing visuals until footage is re-fetched."
         )
 
-    # 3. Voiceover.
-    # Edge TTS is the default (free, no key). If TTS_ALLOW_ELEVENLABS=1
-    # and edge-tts fails for a scene, falls back to ElevenLabs. Dormant
-    # by default because the ElevenLabs free tier blocks library voices.
-    for scene in spec["scenes"]:
-        audio_path = audio_dir / f"{scene['id']}.mp3"
-        if audio_path.exists():
-            print(f"  [skip] audio {audio_path.name}")
-            continue
-        generate_voiceover(
-            scene["script"],
-            audio_path,
-            voice_id,
-            tts,
-            allow_elevenlabs=tts_cfg.allow_elevenlabs,
-        )
-
     # 4. Per-scene HTML.
     for i, scene in enumerate(spec["scenes"], 1):
         scene_proj = html_dir / f"scene_{i:02d}_{scene['kind']}"
         scene_proj.mkdir(parents=True, exist_ok=True)
         html_path = scene_proj / "index.html"
-        html_path.write_text(render_scene_html(scene, spec, palette), encoding="utf-8")
+        enriched_scene = {
+            **scene,
+            "aspect_ratio": render_cfg.aspect_ratio,
+            "word_timings": word_timings_by_scene.get(scene["id"], []),
+        }
+        html_path.write_text(
+            render_scene_html(enriched_scene, spec, palette, render_cfg),
+            encoding="utf-8",
+        )
         _mirror_assets_to_scene(out, scene_proj, scene["id"])
 
     # 5. Per-scene render.
@@ -367,34 +471,57 @@ def main(argv: list[str] | None = None) -> int:
     # Chrome-driven capture process, so concurrent renders scale near-
     # linearly up to the CI runner's headroom. Default `RenderConfig`
     # is 3 — bump on larger runners, lower on 7 GB boxes.
+    #
+    # A rendered scene MP4 was captured at whatever `duration_s` was in
+    # effect the moment it was rendered. If that duration later changes
+    # — a re-run lands on a different audio-anchored length, the brief
+    # gets regenerated, a scene shifts index — mere file existence is
+    # not a valid cache key: the stale MP4 (e.g. captured at 55s) would
+    # be skipped and reused forever even though the HTML underneath now
+    # says 8.2s. `_stored_render_duration` sidecars the duration each
+    # render was captured at so a mismatch triggers a purge + re-render.
     rendered_any = False
-    render_jobs: list[tuple[Path, Path]] = []
+    any_render_stale = False
+    render_jobs: list[tuple[Path, Path, float]] = []
     for i, scene in enumerate(spec["scenes"], 1):
         scene_proj = html_dir / f"scene_{i:02d}_{scene['kind']}"
         mp4_path = render_dir / f"scene_{i:02d}_{scene['kind']}.mp4"
+        duration_s = scene["duration_s"]
+
+        if mp4_path.exists():
+            stored = _stored_render_duration(mp4_path)
+            if stored is None or abs(stored - duration_s) > 0.01:
+                was = f"{stored}s" if stored is not None else "an unknown duration"
+                print(
+                    f"  [stale] render {mp4_path.name} was captured at {was}, "
+                    f"current scene duration_s={duration_s} — purging and re-rendering"
+                )
+                _purge_render(mp4_path)
+                any_render_stale = True
+
         if mp4_path.exists():
             print(f"  [skip] render {mp4_path.name}")
             rendered_any = True
             continue
-        render_jobs.append((scene_proj, mp4_path))
+        render_jobs.append((scene_proj, mp4_path, duration_s))
 
     if render_jobs:
-        cfg = RenderConfig.from_env()
-        max_parallel = max(1, min(cfg.parallel, len(render_jobs)))
+        max_parallel = max(1, min(render_cfg.parallel, len(render_jobs)))
         print(f"  rendering {len(render_jobs)} scenes with {max_parallel} parallel workers")
         with ThreadPoolExecutor(max_workers=max_parallel) as pool:
             futures = {
-                pool.submit(run_hyperframes, proj, mp4, args.hyperframes_version, args.quality): mp4
-                for proj, mp4 in render_jobs
+                pool.submit(run_hyperframes, proj, mp4, args.hyperframes_version, args.quality): (mp4, duration_s)
+                for proj, mp4, duration_s in render_jobs
             }
             for fut in as_completed(futures):
-                mp4 = futures[fut]
+                mp4, duration_s = futures[fut]
                 if not fut.exception():
                     print(f"  ok render {mp4.name}")
                 else:
                     print(f"  ! render {mp4.name} raised: {fut.exception()}")
                 if mp4.exists():
                     rendered_any = True
+                    _write_render_duration(mp4, duration_s)
 
     if not rendered_any:
         print("FAIL: no rendered scenes (HyperFrames likely failed for every scene)", file=sys.stderr)
@@ -405,7 +532,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # 6. Final xfade concat.
+    # If any scene render was purged/regenerated this run, a previously
+    # concatenated final output is stale too (it was stitched from the
+    # old MP4s) — purge it so it gets rebuilt from the current renders.
     final = out / f"{spec['id']}.mp4"
+    if final.exists() and (any_render_stale or render_jobs):
+        print(f"  [stale] final {final.name} was concatenated from now-outdated scene renders — purging")
+        final.unlink()
     scene_mp4s = sorted(render_dir.glob("scene_*.mp4"))
     if not scene_mp4s:
         print("FAIL: no rendered scenes to concatenate", file=sys.stderr)

@@ -15,8 +15,11 @@ from pipeline.compose import (
     parse_args,
     render_scene_html,
 )
+from pipeline.config import RenderConfig
 from pipeline.defaults import DEFAULT_PALETTE, REENCODE_FFMPEG
 from pipeline.schema import load_and_validate
+
+DEFAULT_RENDER_CFG = RenderConfig(parallel=3, aspect_ratio="16:9")
 
 
 def test_parse_args_defaults() -> None:
@@ -72,7 +75,7 @@ def test_render_scene_html_replaces_all_tokens(example_spec_path: Path) -> None:
     spec = load_and_validate(example_spec_path)
     palette = DEFAULT_PALETTE
     for scene in spec["scenes"]:
-        html = render_scene_html(scene, spec, palette)
+        html = render_scene_html(scene, spec, palette, DEFAULT_RENDER_CFG)
         assert html, f"empty HTML for scene {scene['id']!r}"
         # No unfilled tokens should remain.
         for token in (
@@ -92,5 +95,5 @@ def test_render_scene_html_keeps_palette_colours(example_spec_path: Path) -> Non
     spec = load_and_validate(example_spec_path)
     scene = spec["scenes"][0]
     palette = {**DEFAULT_PALETTE, "bg": "#112233"}
-    html = render_scene_html(scene, spec, palette)
+    html = render_scene_html(scene, spec, palette, DEFAULT_RENDER_CFG)
     assert "#112233" in html

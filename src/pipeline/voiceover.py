@@ -5,29 +5,150 @@ Uses Microsoft Edge TTS (free, no API key) as the default. ElevenLabs
 is implemented below but DORMANT — flip the `TTS_ALLOW_ELEVENLABS=1`
 env var to enable it as a fallback.
 
-Why dormant:
+Edge TTS word timings:
+  When using Edge TTS, `generate_with_edge_tts` listens for
+  `WordBoundary` stream events and returns a list of
+  `{"word": str, "start": int, "end": int}` dicts with millisecond
+  offsets. These feed kinetic subtitle animation in renderers.py.
+
+Why dormant ElevenLabs:
   - ElevenLabs free tier now blocks library voices via the API
     (402 paid_plan_required).
   - Edge TTS has no voice-settings tuning (no stability/similarity/
     style knobs), so the output sounds different from ElevenLabs.
-
-ElevenLabs (dormant) requires:
-  - ELEVENLABS_API_KEY
-  - ELEVENLABS_VOICE_ID
-  - The TTS_ALLOW_ELEVENLABS=1 env var
+  - ElevenLabs fallback does not produce word-level timings.
 
 TTS knobs come from `TTSConfig.from_env()` (see pipeline.config).
 """
 
 from __future__ import annotations
 
+import hashlib
+import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import requests
 
 from pipeline.config import TTSConfig
 from pipeline.defaults import ELEVENLABS_VOICE_SETTINGS
+
+
+class WordTiming(TypedDict):
+    word: str
+    start: int
+    end: int
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Audio-duration anchoring
+#
+# Scene durations in the spec are editorial estimates. The real timing
+# constraint is however long the generated voiceover actually runs, so
+# compose.py measures the rendered audio file and overwrites
+# scene["duration_s"] with it (see `probe_audio_duration_seconds`).
+# This padding is added on top so speech has a moment of silence
+# before the scene cuts/crossfades into the next one.
+# ─────────────────────────────────────────────────────────────────────
+AUDIO_PADDING_SEC = 0.2
+
+
+def probe_audio_duration_seconds(path: Path) -> float | None:
+    """Measure the exact duration (seconds) of an audio file via ffprobe.
+
+    Returns None if ffprobe is missing, times out, or the file can't be
+    probed (e.g. zero-byte / corrupt download) — callers should fall
+    back to the spec's authored `duration_s` in that case rather than
+    fail the scene outright.
+    """
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return None
+        duration = float(r.stdout.strip())
+        return duration if duration > 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Cache-busting for cached audio
+#
+# Audio files are cached on disk as `<audio_dir>/<scene_id>.mp3`, keyed
+# only by scene id. If a brief gets edited and re-run against a spec
+# that reuses the same `spec["id"]` (and therefore the same output
+# directory), a stale mp3 from the *previous* version of the script
+# would otherwise be silently reused — including for duration
+# anchoring, which then measures the wrong audio entirely. A sidecar
+# `.hash` file records which script text produced the cached mp3, so
+# compose.py can detect the mismatch and regenerate instead of
+# skipping.
+# ─────────────────────────────────────────────────────────────────────
+def script_hash(script: str) -> str:
+    """Short, stable content hash of a scene's voiceover script."""
+    return hashlib.sha256(script.encode("utf-8")).hexdigest()[:16]
+
+
+def _hash_path(audio_path: Path) -> Path:
+    return audio_path.parent / f"{audio_path.name}.hash"
+
+
+def is_cached_audio_stale(audio_path: Path, script: str) -> bool:
+    """True if `audio_path` exists but doesn't match `script`'s hash.
+
+    Also true (safe default) if the audio exists with no recorded hash
+    at all — e.g. audio generated before this cache-busting existed —
+    since we can't confirm it matches the current script.
+    """
+    if not audio_path.exists():
+        return False
+    hash_path = _hash_path(audio_path)
+    if not hash_path.exists():
+        return True
+    return hash_path.read_text(encoding="utf-8").strip() != script_hash(script)
+
+
+def write_audio_hash(audio_path: Path, script: str) -> None:
+    """Record the script hash for a freshly generated audio file."""
+    _hash_path(audio_path).write_text(script_hash(script), encoding="utf-8")
+
+
+def purge_stale_audio(audio_path: Path) -> None:
+    """Delete a stale cached mp3 + its hash sidecar so it gets regenerated."""
+    audio_path.unlink(missing_ok=True)
+    _hash_path(audio_path).unlink(missing_ok=True)
+
+
+# Edge TTS reports offset/duration in 100-nanosecond units (same as SSML).
+_HUNDRED_NS_PER_MS = 10_000
+
+
+def _ticks_to_ms(ticks: int | float) -> int:
+    """Convert Edge TTS 100-ns ticks to integer milliseconds."""
+    try:
+        return max(0, int(round(float(ticks) / _HUNDRED_NS_PER_MS)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _word_boundary_to_timing(chunk: dict[str, Any]) -> WordTiming | None:
+    """Parse a single WordBoundary chunk into a timing dict."""
+    text = chunk.get("text")
+    if not text or not str(text).strip():
+        return None
+    start = _ticks_to_ms(chunk.get("offset", 0))
+    end = start + _ticks_to_ms(chunk.get("duration", 0))
+    if end <= start:
+        end = start + 1
+    return {"word": str(text).strip(), "start": start, "end": end}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -59,19 +180,22 @@ def generate_with_elevenlabs(text: str, dest: Path, voice_id: str, tts: dict) ->
 # Edge TTS — DEFAULT
 # Requires: pip install edge-tts
 # ─────────────────────────────────────────────────────────────────────
-def generate_with_edge_tts(text: str, dest: Path) -> bool:
-    """Microsoft Edge free TTS. No API key, but requires `edge-tts` package."""
+def generate_with_edge_tts(text: str, dest: Path) -> tuple[bool, list[WordTiming]]:
+    """Microsoft Edge free TTS with word-boundary timestamps.
+
+    Returns `(success, word_timings)`. On failure the timings list is empty.
+    """
     try:
         import edge_tts  # noqa: F401 — imported here so the module is optional
     except ImportError:
         print("  ! edge-tts not installed. pip install edge-tts to enable fallback.")
-        return False
+        return False, []
 
     import asyncio
 
     cfg = TTSConfig.from_env()
 
-    async def _run() -> bytes | None:
+    async def _run() -> tuple[bytes | None, list[WordTiming]]:
         communicate = edge_tts.Communicate(
             text=text,
             voice=cfg.edge_voice,
@@ -79,22 +203,35 @@ def generate_with_edge_tts(text: str, dest: Path) -> bool:
             volume=cfg.edge_volume,
         )
         buf = bytearray()
+        words: list[WordTiming] = []
         async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                buf.extend(chunk["data"])
-        return bytes(buf) if buf else None
+            chunk_type = chunk.get("type")
+            if chunk_type == "audio":
+                data = chunk.get("data")
+                if data:
+                    buf.extend(data)
+            elif chunk_type == "WordBoundary":
+                timing = _word_boundary_to_timing(chunk)
+                if timing is not None:
+                    words.append(timing)
+        return (bytes(buf) if buf else None), words
 
     try:
-        audio_bytes = asyncio.run(_run())
+        audio_bytes, word_timings = asyncio.run(_run())
     except Exception as e:
         print(f"  ! edge-tts failed: {e}")
-        return False
+        return False, []
+
     if not audio_bytes:
         print("  ! edge-tts returned no audio")
-        return False
+        return False, []
+
     dest.write_bytes(audio_bytes)
-    print(f"  ok edge-tts    {dest.name} ({dest.stat().st_size // 1024} KB)")
-    return True
+    print(
+        f"  ok edge-tts    {dest.name} ({dest.stat().st_size // 1024} KB, "
+        f"{len(word_timings)} word boundaries)"
+    )
+    return True, word_timings
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -106,26 +243,34 @@ def generate_voiceover(
     voice_id: str | None,
     tts: dict,
     allow_elevenlabs: bool = False,
-) -> bool:
-    """Generate `text` to `dest`. Returns True on success.
+) -> tuple[bool, list[WordTiming]]:
+    """Generate `text` to `dest`. Returns `(success, word_timings)`.
 
     Strategy:
-      1. Use Edge TTS (free, no key, requires `edge-tts` package).
+      1. Use Edge TTS (free, no key). Word timings come from WordBoundary
+         events when available.
       2. If `allow_elevenlabs` is True AND edge-tts fails, try ElevenLabs
-         as a fallback. Disabled by default — see module docstring.
+         as a fallback (no word timings).
 
     Both generators print their own progress and errors.
     """
-    if generate_with_edge_tts(text, dest):
-        return True
+    ok, word_timings = generate_with_edge_tts(text, dest)
+    if ok:
+        return True, word_timings
 
     cfg = TTSConfig.from_env()
     if not allow_elevenlabs:
         print(f"  ! edge-tts failed and ElevenLabs is dormant — skipping {dest.name}")
-        return False
+        return False, []
 
     print(f"  ! edge-tts failed — falling back to ElevenLabs for {dest.name}")
     if not (voice_id and cfg.elevenlabs_api_key):
-        print("  ! ElevenLabs unavailable (no ELEVENLABS_API_KEY or voice_id) — using edge-tts as primary; this shouldn't normally trigger")
-        return False
-    return generate_with_elevenlabs(text, dest, voice_id, tts)
+        print(
+            "  ! ElevenLabs unavailable (no ELEVENLABS_API_KEY or voice_id) — "
+            "using edge-tts as primary; this shouldn't normally trigger"
+        )
+        return False, []
+
+    if generate_with_elevenlabs(text, dest, voice_id, tts):
+        return True, []
+    return False, []

@@ -22,12 +22,166 @@ stay in sync.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 def cls(sid: str) -> str:
     """CSS-safe class prefix for a scene id. Scene ids may start with a
     digit (e.g. "01_hook"), which is illegal as a CSS identifier start;
     we prefix with "s-" to keep all generated selectors valid."""
     return f"s-{sid}"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Duration-aware keyframe scaling
+#
+# Each kind's `tl.to(...)` calls below use hardcoded start-offset /
+# duration numbers authored against a "nominal" scene length. Since
+# compose.py now overwrites `scene["duration_s"]` with the *actual*
+# TTS audio length (see voiceover.probe_audio_duration_seconds), a
+# short voiceover can produce a scene shorter than that nominal
+# length. `entrance_scale()` returns a compression factor so entrance
+# reveals still land inside the scene, and `exit_fade_start()` places
+# the closing fade so it finishes right as the (audio-anchored) scene
+# ends rather than 0.6s early regardless of length.
+#
+# Scenes at or above the nominal length are left at k=1.0 (original,
+# hand-tuned timing) — there's no dead-space risk there, since the
+# exit fade already anchors to the real `duration_s`.
+# ─────────────────────────────────────────────────────────────────────
+def entrance_scale(scene: dict[str, Any], nominal: float) -> float:
+    """Compression factor for entrance-animation offsets/durations."""
+    duration = scene.get("duration_s") or nominal
+    if duration <= 0 or nominal <= 0:
+        return 1.0
+    return min(1.0, duration / nominal)
+
+
+def exit_fade_start(scene: dict[str, Any], k: float, buffer: float = 0.6) -> float:
+    """Start time for the final opacity-0 fade, scaled with `k` so it
+    still finishes at (approximately) `scene["duration_s"]` even when
+    entrance timings have been compressed for a short scene."""
+    duration = scene.get("duration_s") or 0
+    return max(0.05, duration - buffer * k)
+
+
+def _aspect_ratio(scene: dict[str, Any]) -> str:
+    return scene.get("aspect_ratio") or "16:9"
+
+
+def _aspect_layout_css(scene: dict[str, Any]) -> str:
+    """Stack multi-column layouts vertically for 9:16 Shorts."""
+    if _aspect_ratio(scene) != "9:16":
+        return ""
+
+    sid = cls(scene["id"])
+    kind = scene["kind"]
+    rules: list[str] = [
+        "body[data-aspect-ratio=\"9:16\"] #scene1 .scene-content {",
+        "  flex-direction: column !important;",
+        "  align-items: stretch !important;",
+        "  padding: 80px 48px !important;",
+        "  gap: 40px !important;",
+        "}",
+    ]
+
+    if kind == "scale":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-left {{ width: 100%; }}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-right {{",
+            "  flex: 1 1 auto !important; width: 100%;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-headline {{ font-size: 96px; }}",
+        ])
+    elif kind == "record":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-counter-wrap {{",
+            "  flex: 1 1 auto !important; width: 100%;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-right {{ width: 100%; }}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-counter {{ font-size: 220px; }}",
+        ])
+    elif kind == "grid":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-grid {{",
+            "  grid-template-columns: 1fr !important;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-headline {{ font-size: 72px; }}",
+        ])
+    elif kind == "split":
+        rules.extend([
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-left {{ width: 100%; }}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-right {{",
+            "  flex: 1 1 auto !important; width: 100%; min-height: 240px;",
+            "}",
+            f"body[data-aspect-ratio=\"9:16\"] #scene1 .{sid}-headline {{ font-size: 88px; }}",
+        ])
+
+    return "\n      ".join(rules)
+
+
+def _kinetic_subtitles(scene: dict[str, Any]) -> tuple[str, str, str]:
+    """Build CSS, HTML, and GSAP for word-synced kinetic subtitles.
+
+    Uses `scene["word_timings"]` from Edge TTS WordBoundary events.
+    Returns empty strings when timings are missing.
+    """
+    word_timings: list[dict[str, Any]] = scene.get("word_timings") or []
+    if not word_timings:
+        return "", "", ""
+
+    sid = cls(scene["id"])
+    spans = "".join(
+        f'<span class="word {sid}-word" data-i="{i}">{w["word"]}</span>'
+        for i, w in enumerate(word_timings)
+    )
+    css = f"""
+      #scene1 .{sid}-subtitles {{
+        position: absolute;
+        left: 48px; right: 48px;
+        bottom: 96px;
+        z-index: 4;
+        text-align: center;
+        font-size: clamp(24px, 2.8vw, 36px);
+        line-height: 1.45;
+        pointer-events: none;
+      }}
+      #scene1 .{sid}-subtitles .word {{
+        display: inline;
+        opacity: 0.35;
+        color: var(--fg);
+        margin-right: 0.28em;
+        transition: none;
+      }}
+      body[data-aspect-ratio="9:16"] #scene1 .{sid}-subtitles {{
+        bottom: 112px;
+        font-size: clamp(22px, 3.2vw, 30px);
+        padding: 0 12px;
+      }}
+    """
+    html = f'<div class="kinetic-subtitles {sid}-subtitles">{spans}</div>'
+
+    anim_parts = [
+        f'gsap.set(".{sid}-subtitles .word", {{ opacity: 0.35, color: "var(--fg)" }});',
+    ]
+    for i, w in enumerate(word_timings):
+        start_s = max(0.0, w.get("start", 0) / 1000.0)
+        word_dur = max(0.05, (w.get("end", 0) - w.get("start", 0)) / 1000.0)
+        highlight_dur = min(0.25, word_dur * 0.5)
+        anim_parts.append(
+            f'tl.to(".{sid}-word[data-i=\\"{i}\\"]", '
+            f'{{ opacity: 1, color: "var(--accent)", duration: {highlight_dur:.3f}, '
+            f'ease: "power2.out" }}, {start_s:.3f});'
+        )
+        if i > 0:
+            prev = i - 1
+            anim_parts.append(
+                f'tl.to(".{sid}-word[data-i=\\"{prev}\\"]", '
+                f'{{ opacity: 0.45, color: "var(--fg)", duration: 0.12, ease: "power2.in" }}, '
+                f'{start_s:.3f});'
+            )
+
+    return css, html, "\n      ".join(anim_parts)
 
 
 def hook(scene: dict) -> tuple[str, str, str]:
@@ -57,16 +211,17 @@ def hook(scene: dict) -> tuple[str, str, str]:
       <h1 class="display headline {sid}-headline">{headline}</h1>
       <div class="subhead {sid}-subhead">{subhead}</div>
     """
+    k = entrance_scale(scene, 4.4)
     anim = f"""
       gsap.set(".{sid}-eyebrow", {{ y: -30, opacity: 0 }});
       gsap.set(".{sid}-headline", {{ y: 80, opacity: 0, scale: 0.9 }});
       gsap.set(".{sid}-subhead", {{ y: 20, opacity: 0 }});
-      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: 0.5, ease: "power3.out" }}, 0.3);
-      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, scale: 1, duration: 0.8, ease: "expo.out" }}, 0.7);
-      tl.to(".{sid}-subhead", {{ y: 0, opacity: 1, duration: 0.6, ease: "power2.out" }}, 2.0);
-      tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: 0.4, ease: "back.out(2)" }}, 3.0);
-      // final fade out
-      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});
+      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power3.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, scale: 1, duration: {0.8 * k:.3f}, ease: "expo.out" }}, {0.7 * k:.3f});
+      tl.to(".{sid}-subhead", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {2.0 * k:.3f});
+      tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(2)" }}, {3.0 * k:.3f});
+      // final fade out — timed to finish as the audio-anchored scene ends
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
 
@@ -119,6 +274,9 @@ def scale(scene: dict) -> tuple[str, str, str]:
         {stats_html}
       </div>
     """
+    nominal = 1.8 + max(0, len(stats) - 1) * 0.4 + 0.5 + 1.0
+    k = entrance_scale(scene, nominal)
+
     anim_parts = [f'gsap.set(".{sid}-headline", {{ y: 60, opacity: 0 }});']
     if eyebrow:
         anim_parts.append(f'gsap.set(".{sid}-eyebrow", {{ x: -40, opacity: 0 }});')
@@ -130,20 +288,20 @@ def scale(scene: dict) -> tuple[str, str, str]:
         )
 
     anim_parts.append(
-        f'tl.to(".{sid}-eyebrow", {{ x: 0, opacity: 1, duration: 0.6, ease: "power3.out" }}, 0.4);'
+        f'tl.to(".{sid}-eyebrow", {{ x: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power3.out" }}, {0.4 * k:.3f});'
     )
     anim_parts.append(
-        f'tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: 0.7, ease: "expo.out" }}, 0.7);'
+        f'tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {0.7 * k:.3f});'
     )
     anim_parts.append(
-        f'tl.to(".{sid}-sub", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 1.4);'
+        f'tl.to(".{sid}-sub", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.4 * k:.3f});'
     )
     for i in range(len(stats)):
         anim_parts.append(
-            f'tl.to("[data-i=\\"{i}\\"]", {{ x: 0, opacity: 1, duration: 0.5, ease: "back.out(1.4)" }}, {1.8 + i * 0.4});'
+            f'tl.to("[data-i=\\"{i}\\"]", {{ x: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "back.out(1.4)" }}, {(1.8 + i * 0.4) * k:.3f});'
         )
     anim_parts.append(
-        f'tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});'
+        f'tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});'
     )
     return css, content, "\n      ".join(anim_parts)
 
@@ -200,18 +358,19 @@ def portrait(scene: dict) -> tuple[str, str, str]:
       {sub_html}
       <div class="{sid}-names">{names_html}</div>
     """
+    k = entrance_scale(scene, 6.8)
     anim = f"""
       gsap.set(".{sid}-eyebrow", {{ letterSpacing: "0.8em", opacity: 0 }});
       gsap.set(".{sid}-headline", {{ y: 100, opacity: 0, scale: 0.85 }});
       gsap.set(".{sid}-sub", {{ y: 20, opacity: 0 }});
       gsap.set(".{sid}-name:nth-child(1)", {{ x: -100, opacity: 0 }});
       gsap.set(".{sid}-vs", {{ scale: 0, opacity: 0 }});
-      tl.to(".{sid}-eyebrow", {{ letterSpacing: "0.4em", opacity: 1, duration: 1.0, ease: "power2.out" }}, 0.5);
-      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, scale: 1, duration: 1.0, ease: "expo.out" }}, 1.0);
-      tl.to(".{sid}-sub", {{ y: 0, opacity: 1, duration: 0.7, ease: "power2.out" }}, 4.0);
-      tl.to(".{sid}-name:nth-child(1)", {{ x: 0, opacity: 1, duration: 0.8, ease: "expo.out" }}, 5.0);
-      tl.to(".{sid}-vs", {{ scale: 1, opacity: 1, duration: 0.5, ease: "back.out(2)" }}, 5.3);
-      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});
+      tl.to(".{sid}-eyebrow", {{ letterSpacing: "0.4em", opacity: 1, duration: {1.0 * k:.3f}, ease: "power2.out" }}, {0.5 * k:.3f});
+      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, scale: 1, duration: {1.0 * k:.3f}, ease: "expo.out" }}, {1.0 * k:.3f});
+      tl.to(".{sid}-sub", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "power2.out" }}, {4.0 * k:.3f});
+      tl.to(".{sid}-name:nth-child(1)", {{ x: 0, opacity: 1, duration: {0.8 * k:.3f}, ease: "expo.out" }}, {5.0 * k:.3f});
+      tl.to(".{sid}-vs", {{ scale: 1, opacity: 1, duration: {0.5 * k:.3f}, ease: "back.out(2)" }}, {5.3 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
 
@@ -278,18 +437,19 @@ def record(scene: dict) -> tuple[str, str, str]:
         {quote_html}
       </div>
     """
+    k = entrance_scale(scene, 4.4)
     anim = f"""
       gsap.set(".{sid}-counter-wrap", {{ scale: 0.5, opacity: 0 }});
       gsap.set(".{sid}-counter", {{ scale: 0, opacity: 0 }});
       gsap.set(".{sid}-eyebrow", {{ y: 20, opacity: 0 }});
       gsap.set(".{sid}-name", {{ x: 80, opacity: 0 }});
       gsap.set(".{sid}-quote", {{ y: 30, opacity: 0 }});
-      tl.to(".{sid}-counter-wrap", {{ scale: 1, opacity: 1, duration: 0.6, ease: "expo.out" }}, 0.4);
-      tl.to(".{sid}-counter", {{ scale: 1, opacity: 1, duration: 0.5, ease: "back.out(1.7)" }}, 0.8);
-      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 1.5);
-      tl.to(".{sid}-name", {{ x: 0, opacity: 1, duration: 0.7, ease: "expo.out" }}, 2.0);
-      tl.to(".{sid}-quote", {{ y: 0, opacity: 1, duration: 0.6, ease: "power2.out" }}, 2.8);
-      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});
+      tl.to(".{sid}-counter-wrap", {{ scale: 1, opacity: 1, duration: {0.6 * k:.3f}, ease: "expo.out" }}, {0.4 * k:.3f});
+      tl.to(".{sid}-counter", {{ scale: 1, opacity: 1, duration: {0.5 * k:.3f}, ease: "back.out(1.7)" }}, {0.8 * k:.3f});
+      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.5 * k:.3f});
+      tl.to(".{sid}-name", {{ x: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {2.0 * k:.3f});
+      tl.to(".{sid}-quote", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {2.8 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
 
@@ -353,6 +513,9 @@ def grid(scene: dict) -> tuple[str, str, str]:
       <h2 class="display headline {sid}-headline">{headline}</h2>
       <div class="{sid}-grid">{"".join(cards_html)}</div>
     """
+    nominal = 1.3 + max(0, len(cards) - 1) * 0.3 + 0.6 + 1.0
+    k = entrance_scale(scene, nominal)
+
     anim_parts = [
         f'gsap.set(".{sid}-eyebrow", {{ y: -20, opacity: 0 }});',
         f'gsap.set(".{sid}-headline", {{ y: 60, opacity: 0 }});',
@@ -360,17 +523,17 @@ def grid(scene: dict) -> tuple[str, str, str]:
     for i in range(len(cards)):
         anim_parts.append(f'gsap.set("[data-i=\\"{i}\\"]", {{ y: 80, opacity: 0 }});')
     anim_parts.append(
-        f'tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 0.3);'
+        f'tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {0.3 * k:.3f});'
     )
     anim_parts.append(
-        f'tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: 0.7, ease: "expo.out" }}, 0.6);'
+        f'tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {0.6 * k:.3f});'
     )
     for i in range(len(cards)):
         anim_parts.append(
-            f'tl.to("[data-i=\\"{i}\\"]", {{ y: 0, opacity: 1, duration: 0.6, ease: "power3.out" }}, {1.3 + i * 0.3});'
+            f'tl.to("[data-i=\\"{i}\\"]", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power3.out" }}, {(1.3 + i * 0.3) * k:.3f});'
         )
     anim_parts.append(
-        f'tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});'
+        f'tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});'
     )
     return css, content, "\n      ".join(anim_parts)
 
@@ -415,16 +578,17 @@ def quote(scene: dict) -> tuple[str, str, str]:
       <div class="{sid}-attribution">{attribution}</div>
       {sub_html}
     """
+    k = entrance_scale(scene, 3.9)
     anim = f"""
       gsap.set(".{sid}-eyebrow", {{ y: -20, opacity: 0 }});
       gsap.set(".{sid}-quote-text", {{ y: 40, opacity: 0, scale: 0.95 }});
       gsap.set(".{sid}-attribution", {{ y: 20, opacity: 0 }});
       gsap.set(".{sid}-sub", {{ y: 20, opacity: 0 }});
-      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 0.3);
-      tl.to(".{sid}-quote-text", {{ y: 0, opacity: 1, scale: 1, duration: 1.0, ease: "expo.out" }}, 0.7);
-      tl.to(".{sid}-attribution", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 1.8);
-      tl.to(".{sid}-sub", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 2.4);
-      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});
+      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-quote-text", {{ y: 0, opacity: 1, scale: 1, duration: {1.0 * k:.3f}, ease: "expo.out" }}, {0.7 * k:.3f});
+      tl.to(".{sid}-attribution", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.8 * k:.3f});
+      tl.to(".{sid}-sub", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {2.4 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
 
@@ -473,6 +637,9 @@ def list(scene: dict) -> tuple[str, str, str]:
       {sub_html}
       <div class="{sid}-items">{items_html}</div>
     """
+    nominal = 1.4 + max(0, len(items) - 1) * 0.25 + 0.4 + 1.0
+    k = entrance_scale(scene, nominal)
+
     anim_parts = [
         f'gsap.set(".{sid}-eyebrow", {{ y: -20, opacity: 0 }});',
         f'gsap.set(".{sid}-headline", {{ y: 60, opacity: 0 }});',
@@ -480,17 +647,17 @@ def list(scene: dict) -> tuple[str, str, str]:
     for i in range(len(items)):
         anim_parts.append(f'gsap.set("[data-i=\\"{i}\\"]", {{ x: 60, opacity: 0 }});')
     anim_parts.append(
-        f'tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 0.3);'
+        f'tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {0.3 * k:.3f});'
     )
     anim_parts.append(
-        f'tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: 0.7, ease: "expo.out" }}, 0.6);'
+        f'tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {0.6 * k:.3f});'
     )
     for i in range(len(items)):
         anim_parts.append(
-            f'tl.to("[data-i=\\"{i}\\"]", {{ x: 0, opacity: 1, duration: 0.4, ease: "back.out(1.4)" }}, {1.4 + i * 0.25});'
+            f'tl.to("[data-i=\\"{i}\\"]", {{ x: 0, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(1.4)" }}, {(1.4 + i * 0.25) * k:.3f});'
         )
     anim_parts.append(
-        f'tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});'
+        f'tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});'
     )
     return css, content, "\n      ".join(anim_parts)
 
@@ -535,16 +702,17 @@ def split(scene: dict) -> tuple[str, str, str]:
         <div class="{sid}-image-note">// STILL: {image_query}</div>
       </div>
     """
+    k = entrance_scale(scene, 2.8)
     anim = f"""
       gsap.set(".{sid}-eyebrow", {{ x: -40, opacity: 0 }});
       gsap.set(".{sid}-headline", {{ y: 60, opacity: 0 }});
       gsap.set(".{sid}-body", {{ y: 30, opacity: 0 }});
       gsap.set(".{sid}-right", {{ scale: 0.9, opacity: 0 }});
-      tl.to(".{sid}-eyebrow", {{ x: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 0.3);
-      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: 0.7, ease: "expo.out" }}, 0.6);
-      tl.to(".{sid}-body", {{ y: 0, opacity: 1, duration: 0.5, ease: "power2.out" }}, 1.3);
-      tl.to(".{sid}-right", {{ scale: 1, opacity: 1, duration: 0.8, ease: "expo.out" }}, 1.0);
-      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: 0.4 }}, {scene["duration_s"] - 0.6});
+      tl.to(".{sid}-eyebrow", {{ x: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {0.6 * k:.3f});
+      tl.to(".{sid}-body", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.3 * k:.3f});
+      tl.to(".{sid}-right", {{ scale: 1, opacity: 1, duration: {0.8 * k:.3f}, ease: "expo.out" }}, {1.0 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
 
@@ -564,9 +732,16 @@ RENDERERS = {
 }
 
 
-def render_kind(scene: dict) -> tuple[str, str, str]:
-    """Return (css, content, anim) for a given scene."""
+def render_kind(scene: dict) -> tuple[str, str, str, str]:
+    """Return (css, content, anim, subtitle_html) for a given scene."""
     kind = scene["kind"]
     if kind not in RENDERERS:
         raise ValueError(f"unknown kind {kind!r}")
-    return RENDERERS[kind](scene)
+    css, content, anim = RENDERERS[kind](scene)
+    css = css + _aspect_layout_css(scene)
+    sub_css, sub_html, sub_anim = _kinetic_subtitles(scene)
+    if sub_css:
+        css = css + sub_css
+    if sub_anim:
+        anim = anim + "\n      " + sub_anim
+    return css, content, anim, sub_html

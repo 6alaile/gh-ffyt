@@ -124,11 +124,12 @@ SCENES = {
 
 
 @pytest.mark.parametrize("kind", sorted(SCENES.keys()))
-def test_render_kind_returns_three_non_empty_strings(kind: str) -> None:
-    css, content, anim = render_kind(SCENES[kind]())
+def test_render_kind_returns_css_content_anim_and_subtitle(kind: str) -> None:
+    css, content, anim, subtitle_html = render_kind(SCENES[kind]())
     assert css.strip(), f"{kind}: css is empty"
     assert content.strip(), f"{kind}: content is empty"
     assert anim.strip(), f"{kind}: anim is empty"
+    assert isinstance(subtitle_html, str)
 
 
 @pytest.mark.parametrize("kind", sorted(SCENES.keys()))
@@ -139,7 +140,7 @@ def test_render_kind_class_is_scene_scoped(kind: str) -> None:
     '01_hook'), which is illegal as a CSS identifier start.
     """
     scene = SCENES[kind]()
-    css, content, _ = render_kind(scene)
+    css, content, _, _ = render_kind(scene)
     # CSS-safe class prefix
     sid = f"s-{scene['id']}"
     assert sid in css, f"{kind}: expected {sid!r} to appear in CSS"
@@ -149,6 +150,30 @@ def test_render_kind_class_is_scene_scoped(kind: str) -> None:
 def test_render_kind_unknown_raises() -> None:
     with pytest.raises(ValueError, match="unknown kind"):
         render_kind({"id": "x", "kind": "nope", "duration_s": 1, "script": "x"})
+
+
+def test_kinetic_subtitles_with_word_timings() -> None:
+    scene = {
+        **_hook(),
+        "word_timings": [
+            {"word": "Hello", "start": 0, "end": 200},
+            {"word": "world", "start": 200, "end": 500},
+        ],
+    }
+    css, content, anim, subtitle_html = render_kind(scene)
+    assert "kinetic-subtitles" in subtitle_html
+    assert "Hello" in subtitle_html
+    assert "world" in subtitle_html
+    assert "s-01_hook-word" in subtitle_html
+    assert "tl.to" in anim
+    assert "kinetic-subtitles" in css or "subtitles" in css
+
+
+def test_aspect_layout_css_for_9_16_grid() -> None:
+    scene = {**_grid(), "aspect_ratio": "9:16"}
+    css, _, _, _ = render_kind(scene)
+    assert 'data-aspect-ratio="9:16"' in css or "9:16" in css
+    assert "grid-template-columns: 1fr" in css
 
 
 def test_renderer_dispatch_table_matches_kinds() -> None:

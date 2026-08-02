@@ -145,6 +145,16 @@ def parse_brief(text: str) -> dict[str, Any]:
         raise BriefParseError("no scenes found in brief (no ## Hook or ## Scene section)")
 
     spec.setdefault("id", _slugify(spec.get("youtube", {}).get("title", "draft")))
+
+    # Every scene above got a `duration_s` (either from an explicit
+    # **Duration:** field, a parsed "0:00–0:08" outline range, or the
+    # `10`-second fallback in parse_outline_table). These are rough
+    # editorial estimates only — compose.py always overwrites
+    # scene["duration_s"] with the real generated-audio length (+
+    # padding) once the voiceover exists, so the exact value here just
+    # needs to pass schema validation, not be accurate. This flag
+    # documents that contract for anyone reading the draft spec.
+    spec["_duration_source"] = "brief_estimate_pending_audio_anchor"
     return spec
 
 
@@ -498,7 +508,11 @@ def parse_outline_table(body: str) -> list[dict[str, Any]]:
         sid = _slugify(raw_title)
         scene: dict[str, Any] = {"id": sid}
 
-        # Duration: support "0:08-0:45", "8-45s", "8–22s".
+        # Duration: support "0:08-0:45", "8-45s", "8–22s". This is only
+        # ever a rough placeholder — compose.py overwrites duration_s
+        # with the real TTS audio length once the voiceover is
+        # generated (see spec["_duration_source"]), so the `10`
+        # fallback below just needs to satisfy schema validation.
         if idx_dur is not None and idx_dur < len(cells):
             dur_text = cells[idx_dur].strip()
             scene["duration_s"] = _parse_duration_seconds(dur_text) or 10
