@@ -61,6 +61,7 @@ COMMON_SCENE_FIELDS = {
     "top_label":    (str, False),
     "bottom_label": (str, False),
     "pill":         (str, False),
+    "variant":      (str, False),  # e.g. "diagonal-versus" for kind=split; unknown values fall back to default layout
 }
 
 # Per-kind required + optional fields. Optional fields are still validated

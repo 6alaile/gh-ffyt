@@ -71,7 +71,7 @@ from pipeline.schema import SCENE_KINDS
 # Per-kind extra fields are checked at write-time.
 COMMON_SCENE_FIELDS = {
     "kind", "duration", "query", "top label", "bottom label",
-    "eyebrow", "headline", "subhead", "sub", "pill",
+    "eyebrow", "headline", "subhead", "sub", "pill", "variant",
     "voiceover", "script",
 }
 
@@ -604,6 +604,11 @@ def _parse_bullet_scene_block(name: str, idx: int, body: str) -> dict[str, Any]:
     m = re.search(r"\*\*Pill:\*\*\s*(.+?)\s*$", body, re.MULTILINE)
     if m:
         scene["pill"] = m.group(1).strip()
+
+    # Variant (sub-layout modifier within a kind, e.g. split -> diagonal-versus)
+    m = re.search(r"\*\*Variant:\*\*\s*(.+?)\s*$", body, re.MULTILINE)
+    if m:
+        scene["variant"] = m.group(1).strip()
 
     # Headline / sub / subhead / eyebrow / name.
     # "Name" is the headline for kind=record (the big right-side word).

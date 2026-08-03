@@ -663,6 +663,28 @@ def list(scene: dict) -> tuple[str, str, str]:
 
 
 def split(scene: dict) -> tuple[str, str, str]:
+    """kind=split. Layout is chosen by scene.get("variant"):
+
+      - unset / "side-by-side" (default, original layout): text left, still-image note right.
+      - "top-bottom": text on top, image note below — reads better on 9:16 without
+        the aspect-ratio override doing all the work.
+      - "diagonal-versus": headline split across a clipped diagonal divider, for
+        head-to-head / comparison framing (e.g. Player A vs Player B copy in
+        `headline` using "X <accent>vs</accent> Y").
+
+    Unrecognised variant strings fall back to "side-by-side" rather than
+    erroring — a typo in a brief's **Variant:** field should degrade
+    gracefully, not fail rendering the whole video.
+    """
+    variant = scene.get("variant") or "side-by-side"
+    if variant == "top-bottom":
+        return _split_top_bottom(scene)
+    if variant == "diagonal-versus":
+        return _split_diagonal_versus(scene)
+    return _split_side_by_side(scene)
+
+
+def _split_side_by_side(scene: dict) -> tuple[str, str, str]:
     sid = cls(scene["id"])
     eyebrow = scene["eyebrow"]
     headline = scene["headline"]
@@ -712,6 +734,121 @@ def split(scene: dict) -> tuple[str, str, str]:
       tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {0.6 * k:.3f});
       tl.to(".{sid}-body", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.3 * k:.3f});
       tl.to(".{sid}-right", {{ scale: 1, opacity: 1, duration: {0.8 * k:.3f}, ease: "expo.out" }}, {1.0 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _split_top_bottom(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    body = scene["body"]
+    image_query = scene["image_query"]
+
+    css = f"""
+      #scene1 .scene-content {{ padding: 100px 140px; flex-direction: column; align-items: center; justify-content: center; gap: 48px; }}
+      #scene1 .{sid}-top {{ display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center; }}
+      #scene1 .{sid}-bottom {{
+        width: 100%; max-width: 900px; height: 320px;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--rule);
+      }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px; color: var(--accent);
+        letter-spacing: 0.4em; text-transform: uppercase;
+      }}
+      #scene1 .{sid}-headline {{ font-size: 110px; color: var(--fg); }}
+      #scene1 .{sid}-body {{ font-size: 32px; color: var(--fg); line-height: 1.4; max-width: 820px; }}
+      #scene1 .{sid}-image-note {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px; color: var(--muted);
+        letter-spacing: 0.1em; text-transform: uppercase;
+      }}
+    """
+    content = f"""
+      <div class="{sid}-top">
+        <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+        <h2 class="display headline {sid}-headline">{headline}</h2>
+        <p class="body {sid}-body">{body}</p>
+      </div>
+      <div class="{sid}-bottom">
+        <div class="{sid}-image-note">// STILL: {image_query}</div>
+      </div>
+    """
+    k = entrance_scale(scene, 2.8)
+    anim = f"""
+      gsap.set(".{sid}-eyebrow", {{ y: -20, opacity: 0 }});
+      gsap.set(".{sid}-headline", {{ y: 40, opacity: 0 }});
+      gsap.set(".{sid}-body", {{ y: 20, opacity: 0 }});
+      gsap.set(".{sid}-bottom", {{ y: 40, opacity: 0 }});
+      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.4 * k:.3f}, ease: "power2.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "expo.out" }}, {0.6 * k:.3f});
+      tl.to(".{sid}-body", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.2 * k:.3f});
+      tl.to(".{sid}-bottom", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {1.4 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _split_diagonal_versus(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    body = scene["body"]
+    image_query = scene["image_query"]
+
+    css = f"""
+      #scene1 .scene-content {{ padding: 0; position: relative; align-items: stretch; }}
+      #scene1 .{sid}-diag {{ position: relative; width: 100%; height: 100%; display: flex; }}
+      #scene1 .{sid}-a {{
+        flex: 1; display: flex; flex-direction: column; justify-content: center;
+        padding: 0 60px 0 120px;
+        clip-path: polygon(0 0, 100% 0, 78% 100%, 0 100%);
+        background: rgba(255,255,255,0.03);
+      }}
+      #scene1 .{sid}-b {{
+        flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-end;
+        padding: 0 120px 0 60px; text-align: right;
+        margin-left: -140px;
+      }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px; color: var(--accent);
+        letter-spacing: 0.35em; text-transform: uppercase;
+      }}
+      #scene1 .{sid}-headline {{ font-size: 96px; color: var(--fg); line-height: 1.05; }}
+      #scene1 .{sid}-body {{ font-size: 30px; color: var(--muted); line-height: 1.4; max-width: 480px; }}
+      #scene1 .{sid}-note {{
+        position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px; color: var(--muted);
+        letter-spacing: 0.1em; text-transform: uppercase;
+      }}
+    """
+    # headline is expected to carry the "A vs B" framing (e.g. via <accent>vs</accent>);
+    # both sides render the same headline/eyebrow/body so the visual split does the
+    # differentiating work rather than requiring two separate text sets in the brief.
+    content = f"""
+      <div class="{sid}-diag">
+        <div class="{sid}-a">
+          <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+          <h2 class="display headline {sid}-headline">{headline}</h2>
+        </div>
+        <div class="{sid}-b">
+          <p class="body {sid}-body">{body}</p>
+        </div>
+      </div>
+      <div class="{sid}-note">// STILL: {image_query}</div>
+    """
+    k = entrance_scale(scene, 2.8)
+    anim = f"""
+      gsap.set(".{sid}-a", {{ x: -60, opacity: 0 }});
+      gsap.set(".{sid}-b", {{ x: 60, opacity: 0 }});
+      tl.to(".{sid}-a", {{ x: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "expo.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-b", {{ x: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "expo.out" }}, {0.5 * k:.3f});
       tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
