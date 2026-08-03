@@ -185,6 +185,30 @@ def _kinetic_subtitles(scene: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def hook(scene: dict) -> tuple[str, str, str]:
+    """kind=hook. Layout is chosen by scene.get("variant"):
+
+      - unset / "bold-impact" (default, original layout): centered eyebrow/
+        headline/subhead stack, big scale-in on the headline.
+      - "glitch-reveal": headline flickers in via a quick RGB-split /
+        stutter sequence before settling — for a "something's wrong here"
+        opening beat.
+      - "split-focus": asymmetric layout — big headline on the left ~65%,
+        eyebrow + subhead stacked in a narrow right-hand sidebar behind a
+        vertical rule, rather than everything centered and stacked.
+
+    Same fallback contract as split(): an unrecognised variant string
+    degrades to "bold-impact" instead of raising, so one bad **Variant:**
+    line in a brief doesn't fail the whole render.
+    """
+    variant = scene.get("variant") or "bold-impact"
+    if variant == "glitch-reveal":
+        return _hook_glitch_reveal(scene)
+    if variant == "split-focus":
+        return _hook_split_focus(scene)
+    return _hook_bold_impact(scene)
+
+
+def _hook_bold_impact(scene: dict) -> tuple[str, str, str]:
     sid = cls(scene["id"])
     eyebrow = scene["eyebrow"]
     headline = scene["headline"]
@@ -221,6 +245,125 @@ def hook(scene: dict) -> tuple[str, str, str]:
       tl.to(".{sid}-subhead", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {2.0 * k:.3f});
       tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(2)" }}, {3.0 * k:.3f});
       // final fade out — timed to finish as the audio-anchored scene ends
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _hook_glitch_reveal(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    subhead = scene["subhead"]
+    css = f"""
+      #scene1 .scene-content {{ align-items: center; text-align: center; gap: 0; }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 24px; color: var(--accent);
+        letter-spacing: 0.4em; text-transform: uppercase;
+        margin-bottom: 24px;
+      }}
+      #scene1 .{sid}-headline {{
+        font-size: 170px; color: var(--fg);
+        text-shadow: 3px 0 var(--accent), -3px 0 #00e5ff;
+      }}
+      #scene1 .{sid}-headline .accent {{ color: var(--accent); text-shadow: none; }}
+      #scene1 .{sid}-subhead {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 28px; color: var(--muted);
+        letter-spacing: 0.1em; text-transform: uppercase;
+        margin-top: 32px;
+      }}
+    """
+    content = f"""
+      <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+      <h1 class="display headline {sid}-headline">{headline}</h1>
+      <div class="subhead {sid}-subhead">{subhead}</div>
+    """
+    k = entrance_scale(scene, 4.4)
+    # Stutter sequence: a handful of very short, alternating x-offset /
+    # opacity flickers before the headline settles at x:0, opacity:1.
+    # Kept short (≈0.35s total) so it reads as a beat, not a delay.
+    glitch_steps = [
+        (0.00, {"opacity": "0"}),
+        (0.04, {"opacity": "1", "x": "-8"}),
+        (0.08, {"opacity": "0.2", "x": "6"}),
+        (0.12, {"opacity": "1", "x": "-4"}),
+        (0.18, {"opacity": "0.3", "x": "5"}),
+        (0.24, {"opacity": "1", "x": "-2"}),
+    ]
+    glitch_js = "\n      ".join(
+        f'tl.set(".{sid}-headline", {{ {", ".join(f"{k2}: {v}" for k2, v in props.items())} }}, {(0.7 + t) * k:.3f});'
+        for t, props in glitch_steps
+    )
+    anim = f"""
+      gsap.set(".{sid}-eyebrow", {{ y: -30, opacity: 0 }});
+      gsap.set(".{sid}-headline", {{ opacity: 0, scale: 0.96 }});
+      gsap.set(".{sid}-subhead", {{ y: 20, opacity: 0 }});
+      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.4 * k:.3f}, ease: "power3.out" }}, {0.3 * k:.3f});
+      {glitch_js}
+      tl.to(".{sid}-headline", {{ x: 0, opacity: 1, scale: 1, duration: {0.35 * k:.3f}, ease: "power2.out" }}, {(0.7 + 0.30) * k:.3f});
+      tl.to(".{sid}-subhead", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {2.0 * k:.3f});
+      tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(2)" }}, {3.0 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _hook_split_focus(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    subhead = scene["subhead"]
+    css = f"""
+      #scene1 .scene-content {{
+        flex-direction: row; align-items: center; text-align: left;
+        padding: 0 120px; gap: 0;
+      }}
+      #scene1 .{sid}-main {{ flex: 0 0 62%; }}
+      #scene1 .{sid}-rule {{
+        flex: 0 0 1px; align-self: stretch; margin: 40px 60px;
+        background: var(--rule);
+      }}
+      #scene1 .{sid}-side {{
+        flex: 1; display: flex; flex-direction: column; justify-content: center;
+        gap: 28px;
+      }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px; color: var(--accent);
+        letter-spacing: 0.35em; text-transform: uppercase;
+      }}
+      #scene1 .{sid}-headline {{ font-size: 128px; color: var(--fg); line-height: 1.02; }}
+      #scene1 .{sid}-headline .accent {{ color: var(--accent); }}
+      #scene1 .{sid}-subhead {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 26px; color: var(--muted);
+        letter-spacing: 0.08em; text-transform: uppercase;
+        line-height: 1.5;
+      }}
+    """
+    content = f"""
+      <div class="{sid}-main">
+        <h1 class="display headline {sid}-headline">{headline}</h1>
+      </div>
+      <div class="{sid}-rule"></div>
+      <div class="{sid}-side">
+        <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+        <div class="subhead {sid}-subhead">{subhead}</div>
+      </div>
+    """
+    k = entrance_scale(scene, 4.4)
+    anim = f"""
+      gsap.set(".{sid}-headline", {{ x: -50, opacity: 0 }});
+      gsap.set(".{sid}-rule", {{ scaleY: 0, opacity: 0 }});
+      gsap.set(".{sid}-eyebrow", {{ x: 30, opacity: 0 }});
+      gsap.set(".{sid}-subhead", {{ x: 30, opacity: 0 }});
+      tl.to(".{sid}-headline", {{ x: 0, opacity: 1, duration: {0.8 * k:.3f}, ease: "expo.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-rule", {{ scaleY: 1, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {0.9 * k:.3f});
+      tl.to(".{sid}-eyebrow", {{ x: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.2 * k:.3f});
+      tl.to(".{sid}-subhead", {{ x: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.5 * k:.3f});
+      tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(2)" }}, {3.0 * k:.3f});
       tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
