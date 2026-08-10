@@ -35,6 +35,9 @@ dependencies = [
     "google-api-python-client>=2.120",
     # Edge TTS - default TTS, free, no API key required.
     "edge-tts>=6.1",
+    # Whisper captions - free, local, no API key. Generates the
+    # YouTube captions.srt from the final rendered video's audio.
+    "faster-whisper>=1.0",
     # Web UI - local single-user host. md2yt-ui command.
     "Flask>=3.0",
 ]

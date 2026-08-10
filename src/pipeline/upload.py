@@ -14,7 +14,9 @@ Optional env:
   YT_SPEC_PATH                path to the JSON spec (default: specs/<id>.json,
                               where <id> matches VIDEO_FILE stem if not given)
   YT_THUMBNAIL_PATH           path to a thumbnail image
-  YT_CAPTIONS_PATH            path to a captions.srt
+  YT_CAPTIONS_PATH            path to a captions.srt (defaults to the
+                              Whisper-generated <video_file>.srt next
+                              to VIDEO_FILE, if present)
   YT_TITLE / YT_DESCRIPTION / YT_TAGS / YT_PRIVACY_STATUS / YT_PUBLISH_AT
                              overrides for the matching spec field
   YT_CATEGORY_ID              override category id
@@ -261,6 +263,13 @@ def main() -> int:
     video_file = Path(defaults.video_file)
     thumbnail = defaults.thumbnail_path
     captions = defaults.captions_path
+    if not captions:
+        # compose.py writes captions next to the video as <id>.srt
+        # (see pipeline.captions). Use it when no explicit override
+        # was given via YT_CAPTIONS_PATH.
+        auto_srt = video_file.with_suffix(".srt")
+        if auto_srt.exists():
+            captions = str(auto_srt)
 
     spec = load_spec(defaults)
     metadata = build_metadata(spec, defaults)

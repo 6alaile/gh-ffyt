@@ -8,6 +8,7 @@ Grouped by concern:
   - FootageKeys    — stock-footage API keys (Pixabay, Pexels).
   - TTSConfig      — voiceover knobs (Edge TTS defaults, ElevenLabs toggle).
   - RenderConfig   — composer knobs (parallelism, aspect ratio).
+  - CaptionsConfig — Whisper captions knobs (on/off, model size).
   - YouTubeSecrets — base64-encoded OAuth credentials for upload.
   - YouTubeDefaults — one-shot env-var overrides + paths for upload.
 
@@ -120,6 +121,27 @@ class RenderConfig:
     @property
     def stage_height(self) -> int:
         return STAGE_DIMENSIONS[self.aspect_ratio][1]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Captions
+# ─────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class CaptionsConfig:
+    """Whisper captions knobs.
+
+    Free, local, no API key. Enabled by default — set
+    CAPTIONS_ENABLED=0 to skip (e.g. faster-whisper not installed).
+    """
+    enabled: bool
+    model_size: str
+
+    @classmethod
+    def from_env(cls) -> "CaptionsConfig":
+        return cls(
+            enabled=_env("CAPTIONS_ENABLED") != "0",
+            model_size=_env("WHISPER_MODEL_SIZE") or "base",
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────

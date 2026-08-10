@@ -29,7 +29,8 @@ from importlib.resources import files as resource_files
 from pathlib import Path
 from typing import Any
 
-from pipeline.config import RenderConfig, TTSConfig
+from pipeline.captions import generate_captions_srt
+from pipeline.config import CaptionsConfig, RenderConfig, TTSConfig
 from pipeline.defaults import DEFAULT_PALETTE, DEFAULT_TTS, REENCODE_FFMPEG
 from pipeline.fetchers import download_file, fetch_clip
 from pipeline.renderers import render_kind
@@ -539,6 +540,10 @@ def main(argv: list[str] | None = None) -> int:
     if final.exists() and (any_render_stale or render_jobs):
         print(f"  [stale] final {final.name} was concatenated from now-outdated scene renders — purging")
         final.unlink()
+        srt_path = out / f"{spec['id']}.srt"
+        if srt_path.exists():
+            print(f"  [stale] captions {srt_path.name} were transcribed from the old final audio — purging")
+            srt_path.unlink()
     scene_mp4s = sorted(render_dir.glob("scene_*.mp4"))
     if not scene_mp4s:
         print("FAIL: no rendered scenes to concatenate", file=sys.stderr)
@@ -550,6 +555,22 @@ def main(argv: list[str] | None = None) -> int:
         if not ok or not final.exists():
             print(f"FAIL: xfade concat did not produce {final}", file=sys.stderr)
             return 1
+
+    # 7. Captions (Whisper, free/local). Transcribes the final,
+    # already-concatenated audio so timestamps match what's actually
+    # in the video (post-xfade), rather than deriving them from the
+    # per-scene edge-tts word timings.
+    captions_cfg = CaptionsConfig.from_env()
+    if captions_cfg.enabled:
+        srt_path = out / f"{spec['id']}.srt"
+        if srt_path.exists():
+            print(f"  [skip] captions {srt_path.name}")
+        else:
+            ok = generate_captions_srt(final, srt_path, model_size=captions_cfg.model_size)
+            if not ok:
+                print(f"  ! captions generation failed — continuing without {srt_path.name}")
+    else:
+        print("  [skip] captions disabled (CAPTIONS_ENABLED=0)")
 
     print(f"\nDONE: {final}")
     return 0
