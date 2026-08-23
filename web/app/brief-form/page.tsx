@@ -114,7 +114,7 @@ export default function BriefFormPage() {
     }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleGenerateBrief = async (e: React.FormEvent) => {
     e.preventDefault();
     console.log("Submitting brief:", formData);
   };
@@ -159,7 +159,7 @@ export default function BriefFormPage() {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4 max-w-2xl">
+      <form onSubmit={handleGenerateBrief} className="space-y-4 max-w-2xl">
         <div>
           <label className="block text-sm font-medium">Match Title</label>
           <input
