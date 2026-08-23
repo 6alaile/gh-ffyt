@@ -1,11 +1,11 @@
 {
   "/_not-found/page": "/_not-found",
-  "/api/history/route": "/api/history",
   "/api/download/route": "/api/download",
-  "/api/render/route": "/api/render",
   "/api/upload/route": "/api/upload",
+  "/api/history/route": "/api/history",
+  "/api/render/route": "/api/render",
   "/api/status/route": "/api/status",
-  "/dashboard/page": "/dashboard",
   "/brief-form/page": "/brief-form",
+  "/dashboard/page": "/dashboard",
   "/page": "/"
 }
