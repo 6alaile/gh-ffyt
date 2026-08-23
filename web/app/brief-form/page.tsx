@@ -11,7 +11,10 @@ type FormData = {
   cta: string;
 };
 
+type BriefMode = "quick" | "research" | "topic-only";
+
 export default function BriefFormPage() {
+  const [mode, setMode] = useState<BriefMode>("research");
   const [formData, setFormData] = useState<FormData>({
     matchTitle: "",
     teams: "",
@@ -23,6 +26,11 @@ export default function BriefFormPage() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [generatedBrief, setGeneratedBrief] = useState("");
+  const [briefId, setBriefId] = useState("");
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
@@ -75,8 +83,9 @@ export default function BriefFormPage() {
         throw new Error("Transcription failed");
       }
 
-      const { transcript } = await res.json();
-      populateFormFromTranscript(transcript);
+      const { transcript: text } = await res.json();
+      setTranscript(text);
+      populateFormFromTranscript(text);
     } catch (error) {
       console.error("Transcription error:", error);
       alert("Transcription failed. Please try again.");
@@ -85,39 +94,94 @@ export default function BriefFormPage() {
     }
   };
 
-  const populateFormFromTranscript = (transcript: string) => {
-    let matchTitle = formData.matchTitle;
-    let teams = formData.teams;
-    let keyMoments = formData.keyMoments;
-
-    const vsMatch = transcript.match(/([\w\s]+)\s+(?:vs|versus|against)\s+([\w\s]+)/i);
-    if (vsMatch && !teams) {
-      teams = `${vsMatch[1].trim()} vs ${vsMatch[2].trim()}`;
+  const populateFormFromTranscript = (text: string) => {
+    const vsMatch = text.match(/([\w\s]+)\s+(?:vs|versus|against)\s+([\w\s]+)/i);
+    if (vsMatch && !formData.teams) {
+      setFormData(prev => ({ ...prev, teams: `${vsMatch[1].trim()} vs ${vsMatch[2].trim()}` }));
     }
 
-    if (!matchTitle && transcript.length > 10) {
-      const firstSentence = transcript.split(/[.!?]/)[0];
+    if (!formData.matchTitle && text.length > 10) {
+      const firstSentence = text.split(/[.!?]/)[0];
       if (firstSentence.length < 100) {
-        matchTitle = firstSentence.trim();
+        setFormData(prev => ({ ...prev, matchTitle: firstSentence.trim() }));
       }
     }
 
-    if (!keyMoments) {
-      keyMoments = transcript;
+    if (!formData.keyMoments) {
+      setFormData(prev => ({ ...prev, keyMoments: text }));
     }
-
-    setFormData((prev) => ({
-      ...prev,
-      matchTitle: matchTitle || prev.matchTitle,
-      teams: teams || prev.teams,
-      keyMoments: keyMoments || prev.keyMoments,
-    }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    console.log("Submitting brief:", formData);
+  const handleGenerateBrief = async () => {
+    setIsGenerating(true);
+    try {
+      const res = await fetch("/api/brief", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          formData,
+          transcript,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Brief generation failed");
+      }
+
+      const { briefId: id, markdown } = await res.json();
+      setBriefId(id);
+      setGeneratedBrief(markdown);
+    } catch (error) {
+      console.error("Brief generation error:", error);
+      alert("Failed to generate brief. Please try again.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
+
+  const handleApproveAndGenerateSpec = async () => {
+    if (!briefId || !generatedBrief) return;
+
+    alert(`Brief approved! Spec generation coming soon.\n\nBrief ID: ${briefId}`);
+  };
+
+  if (generatedBrief) {
+    return (
+      <div className="p-8">
+        <h1 className="text-2xl font-bold mb-6">Review & Edit Brief</h1>
+        <p className="text-muted mb-6">
+          Edit the generated brief below, then approve to generate the video spec.
+        </p>
+
+        <div className="card mb-6">
+          <h2 className="text-lg font-semibold mb-3">Brief ID: {briefId}</h2>
+          <textarea
+            value={generatedBrief}
+            onChange={(e) => setGeneratedBrief(e.target.value)}
+            className="block w-full rounded-md border px-3 py-2 font-mono text-sm"
+            rows={30}
+            style={{ minHeight: "600px" }}
+          />
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={handleApproveAndGenerateSpec}
+            className="btn-primary"
+          >
+            Approve & Generate Spec
+          </button>
+          <button
+            onClick={() => setGeneratedBrief("")}
+            className="btn-ghost"
+          >
+            Start Over
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8">
@@ -128,10 +192,49 @@ export default function BriefFormPage() {
       </p>
 
       <div className="card mb-6 max-w-2xl">
+        <h2 className="text-lg font-semibold mb-3">Mode Selection</h2>
+        <p className="text-sm text-muted mb-4">Choose how to generate your brief:</p>
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="mode"
+              value="quick"
+              checked={mode === "quick"}
+              onChange={() => setMode("quick")}
+            />
+            <span className="font-medium">Quick Brief</span>
+            <span className="text-sm text-muted">- Just format my input, no research</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="mode"
+              value="research"
+              checked={mode === "research"}
+              onChange={() => setMode("research")}
+            />
+            <span className="font-medium">Research-Enhanced</span>
+            <span className="text-sm text-muted">- Enrich with Reddit, RSS, Trends data</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="mode"
+              value="topic-only"
+              checked={mode === "topic-only"}
+              onChange={() => setMode("topic-only")}
+            />
+            <span className="font-medium">Topic-Only Research</span>
+            <span className="text-sm text-muted">- Just give a topic, we find everything</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="card mb-6 max-w-2xl">
         <h2 className="text-lg font-semibold mb-3">Voice Input (Optional)</h2>
         <p className="text-sm text-muted mb-4">
-          Record your thoughts and we will auto-populate the form fields below. You can
-          edit them before submitting.
+          Record your thoughts and we will auto-populate the form fields below.
         </p>
         <div className="flex gap-3">
           {!isRecording ? (
@@ -149,91 +252,4 @@ export default function BriefFormPage() {
               onClick={stopRecording}
               className="btn-ghost"
               style={{ background: "#dc2626", color: "#fff" }}
-            >
-              Stop Recording
-            </button>
-          )}
-        </div>
-        {isRecording && (
-          <p className="text-sm text-muted mt-2">Recording... Click Stop Recording when done.</p>
-        )}
-      </div>
-
-      <form onSubmit={handleSubmit} className="space-y-4 max-w-2xl">
-        <div>
-          <label className="block text-sm font-medium">Match Title</label>
-          <input
-            type="text"
-            placeholder="e.g. Why Liverpool Midfield Collapsed"
-            className="block w-full rounded-md border px-3 py-2 shadow-sm"
-            value={formData.matchTitle}
-            onChange={(e) => setFormData({ ...formData, matchTitle: e.target.value })}
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium">Teams Involved</label>
-          <input
-            type="text"
-            placeholder="e.g. Liverpool vs Manchester City"
-            className="block w-full rounded-md border px-3 py-2 shadow-sm"
-            value={formData.teams}
-            onChange={(e) => setFormData({ ...formData, teams: e.target.value })}
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium">Key Moments</label>
-          <textarea
-            rows={3}
-            placeholder="e.g. Liverpool conceded 2 in last 15 min"
-            className="block w-full rounded-md border px-3 py-2 shadow-sm resize-y"
-            value={formData.keyMoments}
-            onChange={(e) => setFormData({ ...formData, keyMoments: e.target.value })}
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium">Analysis Angle</label>
-          <select
-            className="block w-full rounded-md border px-3 py-2 shadow-sm"
-            value={formData.analysisAngle}
-            onChange={(e) => setFormData({ ...formData, analysisAngle: e.target.value })}
-          >
-            <option value="defensive-collapse">Defensive collapse</option>
-            <option value="high-line-exposed">High line exposed</option>
-            <option value="title-implications">Title race implications</option>
-            <option value="player-performance">Individual player performance</option>
-            <option value="other">Other</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm font-medium">Tone</label>
-          <select
-            className="block w-full rounded-md border px-3 py-2 shadow-sm"
-            value={formData.tone}
-            onChange={(e) => setFormData({ ...formData, tone: e.target.value })}
-          >
-            <option value="analytical">Analytical</option>
-            <option value="energetic">Energetic</option>
-            <option value="subdued">Subdued</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-sm font-medium">CTA</label>
-          <input
-            type="text"
-            placeholder="e.g. Which team should we break down next"
-            className="block w-full rounded-md border px-3 py-2 shadow-sm"
-            value={formData.cta}
-            onChange={(e) => setFormData({ ...formData, cta: e.target.value })}
-            required
-          />
-        </div>
-        <button type="submit" className="btn-primary w-full">
-          Generate Brief
-        </button>
-      </form>
-    </div>
-  );
-}
+ 
