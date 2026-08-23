@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "functions": {
+    "/api/history": {},
+    "/api/download": {},
+    "/api/render": {},
+    "/api/status": {},
+    "/api/upload": {}
+  }
+}
