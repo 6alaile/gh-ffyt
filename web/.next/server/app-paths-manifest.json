@@ -1,10 +1,10 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
   "/api/download/route": "app/api/download/route.js",
+  "/api/status/route": "app/api/status/route.js",
   "/api/upload/route": "app/api/upload/route.js",
   "/api/history/route": "app/api/history/route.js",
   "/api/render/route": "app/api/render/route.js",
-  "/api/status/route": "app/api/status/route.js",
   "/brief-form/page": "app/brief-form/page.js",
   "/dashboard/page": "app/dashboard/page.js",
   "/page": "app/page.js"

@@ -22,6 +22,13 @@
       "static/chunks/main-app-afa3c83b94d35a63.js",
       "static/chunks/app/api/download/route-4a26ffde4fdc5160.js"
     ],
+    "/api/status/route": [
+      "static/chunks/webpack-c042ca735a68d6ec.js",
+      "static/chunks/4bd1b696-c023c6e3521b1417.js",
+      "static/chunks/255-87552e6e05b8e3aa.js",
+      "static/chunks/main-app-afa3c83b94d35a63.js",
+      "static/chunks/app/api/status/route-4a26ffde4fdc5160.js"
+    ],
     "/api/upload/route": [
       "static/chunks/webpack-c042ca735a68d6ec.js",
       "static/chunks/4bd1b696-c023c6e3521b1417.js",
@@ -42,13 +49,6 @@
       "static/chunks/255-87552e6e05b8e3aa.js",
       "static/chunks/main-app-afa3c83b94d35a63.js",
       "static/chunks/app/api/render/route-4a26ffde4fdc5160.js"
-    ],
-    "/api/status/route": [
-      "static/chunks/webpack-c042ca735a68d6ec.js",
-      "static/chunks/4bd1b696-c023c6e3521b1417.js",
-      "static/chunks/255-87552e6e05b8e3aa.js",
-      "static/chunks/main-app-afa3c83b94d35a63.js",
-      "static/chunks/app/api/status/route-4a26ffde4fdc5160.js"
     ],
     "/brief-form/page": [
       "static/chunks/webpack-c042ca735a68d6ec.js",
