@@ -139,6 +139,20 @@ export default function HomePage() {
           Upload a markdown content brief. We commit it to your repo, dispatch the
           render workflow, and hand you the spec + MP4 when it&apos;s done.
         </p>
+        <div className="flex gap-3 mt-6">
+          <a
+            href="/brief-form"
+            className="btn-primary px-4 py-2 text-sm no-underline"
+          >
+            Create Brief →
+          </a>
+          <a
+            href="/dashboard"
+            className="btn-ghost px-4 py-2 text-sm no-underline"
+          >
+            Dashboard
+          </a>
+        </div>
       </header>
 
       <section className="card mb-8">

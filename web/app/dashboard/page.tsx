@@ -63,19 +63,36 @@ export default function DashboardPage() {
           Video aspect ratio. Shorts (9:16) are your discovery engine; 16:9 is your
           retention & SEO pillar.
         </p>
-        <div className="flex gap-4">
+        <div className="relative inline-flex items-center bg-gray-200 rounded-full p-1 shadow-md" style={{ boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)' }}>
+          <div
+            className="absolute top-1 bottom-1 bg-gray-900 rounded-full transition-all duration-300 ease-in-out"
+            style={{
+              width: 'calc(50% - 4px)',
+              left: state.aspect === "16:9" ? '4px' : 'calc(50% + 0px)',
+            }}
+          />
           <button
-            onClick={toggleAspect}
-            className="btn-primary px-6 py-2"
-            style={{ background: state.aspect === "16:9" ? "var(--accent)" : "var(--muted)" }}
+            onClick={() => setState((s) => ({ ...s, aspect: "16:9" }))}
+            className="relative z-10 px-6 py-2 rounded-full font-medium transition-colors duration-300"
+            style={{
+              color: state.aspect === "16:9" ? '#ffffff' : '#1f2937',
+              width: '140px',
+            }}
           >
-            {state.aspect === "16:9" ? "Switch to 9:16 (Shorts)" : "Switch to 16:9 (Long-form)"}
+            Horizontal
           </button>
-          <span className="text-sm text-muted">
-            Current: {state.aspect}
-          </span>
+          <button
+            onClick={() => setState((s) => ({ ...s, aspect: "9:16" }))}
+            className="relative z-10 px-6 py-2 rounded-full font-medium transition-colors duration-300"
+            style={{
+              color: state.aspect === "9:16" ? '#ffffff' : '#1f2937',
+              width: '140px',
+            }}
+          >
+            Vertical
+          </button>
         </div>
-        <p className="text-xs text-muted mt-2">
+        <p className="text-xs text-muted mt-4">
           Shorts (9:16) = discovery engine. Every breakout faceless channel grew on
           Shorts first (GoalRush, FREEZZ, KE TECH). 1 per week is enough to start.
         </p>
