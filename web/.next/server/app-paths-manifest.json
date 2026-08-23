@@ -1,6 +1,7 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
   "/api/brief/route": "app/api/brief/route.js",
+  "/api/spec/route": "app/api/spec/route.js",
   "/api/transcribe/route": "app/api/transcribe/route.js",
   "/api/render/route": "app/api/render/route.js",
   "/api/download/route": "app/api/download/route.js",
@@ -8,6 +9,6 @@
   "/api/history/route": "app/api/history/route.js",
   "/api/upload/route": "app/api/upload/route.js",
   "/brief-form/page": "app/brief-form/page.js",
-  "/page": "app/page.js",
-  "/dashboard/page": "app/dashboard/page.js"
+  "/dashboard/page": "app/dashboard/page.js",
+  "/page": "app/page.js"
 }

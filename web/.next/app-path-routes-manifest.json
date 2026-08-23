@@ -1,6 +1,7 @@
 {
   "/_not-found/page": "/_not-found",
   "/api/brief/route": "/api/brief",
+  "/api/spec/route": "/api/spec",
   "/api/transcribe/route": "/api/transcribe",
   "/api/render/route": "/api/render",
   "/api/download/route": "/api/download",
@@ -8,6 +9,6 @@
   "/api/history/route": "/api/history",
   "/api/upload/route": "/api/upload",
   "/brief-form/page": "/brief-form",
-  "/page": "/",
-  "/dashboard/page": "/dashboard"
+  "/dashboard/page": "/dashboard",
+  "/page": "/"
 }
