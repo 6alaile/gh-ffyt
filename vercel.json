@@ -1,3 +1,11 @@
 {
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    }
+  ],
   "ignoreCommand": "git diff --name-only HEAD^ HEAD | grep -qvE '^(briefs/|specs/_uploads/)' && exit 1 || exit 0"
 }
