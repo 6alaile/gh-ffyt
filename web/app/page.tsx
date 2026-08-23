@@ -229,16 +229,6 @@ export default function HomePage() {
         </section>
       )}
 
-
-      {status.phase === "failed" && (
-        <section className="card mb-8 border-danger">
-          <h2 className="mb-4 text-lg font-semibold text-danger">Failed</h2>
-          <p className="text-sm">{status.message}</p>
-          <button onClick={reset} className="btn-ghost mt-6">
-            Try again
-          </button>
-        </section>
-      )}
       {runs.length > 0 && (
         <section className="card mt-8">
           <h2 className="mb-4 text-lg font-semibold">Recent runs (split)</h2>
@@ -273,75 +263,4 @@ export default function HomePage() {
 
     </main>
   );
-}
-      {status.phase === "failed" && (
-        <section className="card mb-8 border-danger">
-          <h2 className="mb-4 text-lg font-semibold text-danger">Failed</h2>
-          <p className="text-sm">{status.message}</p>
-          <button onClick={reset} className="btn-ghost mt-6">
-            Try again
-          </button>
-        </section>
-      )}
-
-      {runs.length > 0 && (
-        <section className="card mt-8">
-          <h2 className="mb-4 text-lg font-semibold">Recent runs (split)</h2>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-muted">
-                <th className="pb-2 pr-4">Date</th>
-                <th className="pb-2 pr-4">Status</th>
-                <th className="pb-2">Link</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((run) => (
-                <tr key={run.id} className="border-t border-border">
-                  <td className="py-2 pr-4 text-muted">{new Date(run.created_at).toLocaleString()}</td>
-                  <td className="py-2 pr-4">
-                    <span className={run.conclusion === "success" ? "badge-ok" : run.status === "in_progress" ? "badge-running" : "badge-failed"}>
-                      {run.conclusion ?? run.status}
-                    </span>
-                  </td>
-                  <td className="py-2">
-                    <a className="text-accent underline" href={run.html_url} target="_blank" rel="noreferrer">
-                      Actions →
-                    </a>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
-
-      {status.phase === "failed" && (
-        <section className="card mb-8 border-danger">
-          <h2 className="mb-4 text-lg font-semibold text-danger">Failed</h2>
-          <p className="text-sm">{status.message}</p>
-          <button onClick={reset} className="btn-ghost mt-6">
-            Try again
-          </button>
-        </section>
-      )}
-
-      <section className="card mb-8">
-        <h2 className="mb-4 text-lg font-semibold">3. Create Brief from Conversation</h2>
-        <p className="text-sm text-muted mb-4">
-          Or start from a conversation about a match you just watched. Fill the form
-          below, record your voice, and we'll generate a brief that feeds into the
-          MD2YT pipeline — automatically creating a GitHub Discussion and triggering
-          the research→brief→spec→render flow.
-        </p>
-        <a
-          href="/brief-form"
-          className="underline hover:text-accent"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Go to Brief Creator →
-        </a>
-      </section>
-    )
 }
