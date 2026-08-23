@@ -87,7 +87,8 @@ export default function DashboardPage() {
           Run the AI script writer to add narrative emphasis, word timings, and CTA
           notes to all scenes. Uses your configured LLM (Omniroute) or rule-based
           fallback.
-        </button>
+        </p>
+        <div>
           {state.enhanced ? (
             <p className="text-sm text-muted">Scripts already enhanced</p>
           ) : (
@@ -98,8 +99,8 @@ export default function DashboardPage() {
             >
               {state.loading ? "Enhancing..." : "Enhance Scripts"}
             </button>
-          )
-        </p>
+          )}
+        </div>
       </section>
 
       <section className="card mb-8">
