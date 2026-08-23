@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
 import crypto from "crypto";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type BriefRequest = {
   mode: "quick" | "research" | "topic-only";
@@ -10,8 +10,8 @@ type BriefRequest = {
     matchTitle?: string;
     teams?: string;
     keyMoments?: string;
-    analysisAngle: string;
-    tone: string;
+    analysisAngle?: string;
+    tone?: string;
     cta?: string;
   };
   transcript?: string;
@@ -23,52 +23,147 @@ export async function POST(req: NextRequest) {
     const { mode, formData, transcript } = body;
 
     const briefId = crypto.randomBytes(4).toString("hex");
-    const briefDir = path.join(process.cwd(), "..", "briefs");
-    await mkdir(briefDir, { recursive: true });
 
-    let briefMarkdown: string;
+    let enrichedContent = "";
+    const apiKey =
+      process.env.OMNIROUTE_API_KEY ||
+      process.env.OPENROUTER_API_KEY ||
+      process.env.OPENAI_API_KEY;
 
-    if (mode === "quick") {
-      briefMarkdown = await generateQuickBrief(formData, transcript);
-    } else if (mode === "research") {
-      briefMarkdown = await generateResearchBrief(formData, transcript);
-    } else {
-      briefMarkdown = await generateTopicOnlyBrief(formData.matchTitle || "");
+    if (apiKey && (mode === "research" || mode === "topic-only")) {
+      try {
+        enrichedContent = await callLLMEnrichment({
+          apiKey,
+          mode,
+          formData,
+          transcript,
+        });
+      } catch (err) {
+        console.warn("LLM enrichment failed, falling back to rule-based:", err);
+      }
     }
 
-    const briefPath = path.join(briefDir, `brief-${briefId}.md`);
-    await writeFile(briefPath, briefMarkdown, "utf-8");
+    const briefMarkdown = buildMarkdownBrief({
+      briefId,
+      mode,
+      formData,
+      transcript,
+      enrichedContent,
+    });
 
     return NextResponse.json({
       briefId,
-      briefPath: `briefs/brief-${briefId}.md`,
       markdown: briefMarkdown,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Brief generation error:", error);
-    return NextResponse.json({ error: "Brief generation failed" }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || "Brief generation failed" },
+      { status: 500 }
+    );
   }
 }
 
-function generateQuickBrief(formData: any, transcript?: string): Promise<string> {
-  const title = formData.matchTitle || "Untitled Match Analysis";
-  const teams = formData.teams || "TBD";
-  const keyMoments = formData.keyMoments || transcript || "No key moments provided";
-  const angle = formData.analysisAngle || "general";
-  const tone = formData.tone || "analytical";
-  const cta = formData.cta || "Subscribe for more analysis";
+async function callLLMEnrichment({
+  apiKey,
+  mode,
+  formData,
+  transcript,
+}: {
+  apiKey: string;
+  mode: string;
+  formData: any;
+  transcript?: string;
+}): Promise<string> {
+  const isOmni = process.env.OMNIROUTE_API_KEY || process.env.OPENROUTER_API_KEY;
+  const url = isOmni
+    ? "https://openrouter.ai/api/v1/chat/completions"
+    : "https://api.openai.com/v1/chat/completions";
 
-  const brief = `# Content Brief: ${title}
+  const prompt = `You are a YouTube football tactical analyst. 
+Synthesize a short, punchy tactical breakdown for a video brief based on these details:
+Match/Topic: ${formData.matchTitle || formData.teams || "Match Breakdown"}
+Teams: ${formData.teams || "N/A"}
+Key Moments: ${formData.keyMoments || transcript || "N/A"}
+Angle: ${formData.analysisAngle || "defensive-collapse"}
+Tone: ${formData.tone || "analytical"}
+
+Provide:
+1. A 1-sentence hook line for the video.
+2. 3 key tactical points explaining what went wrong or right.
+3. Suggested scene titles and voiceover lines for a 2-minute video.`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: isOmni ? "google/gemini-2.0-flash-001" : "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 600,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`LLM API returned ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || "";
+}
+
+function buildMarkdownBrief({
+  briefId,
+  mode,
+  formData,
+  transcript,
+  enrichedContent,
+}: {
+  briefId: string;
+  mode: string;
+  formData: any;
+  transcript?: string;
+  enrichedContent?: string;
+}): string {
+  const title =
+    formData.matchTitle || transcript?.slice(0, 40) || "Match Breakdown";
+  const teams = formData.teams || "Team A vs Team B";
+  const moments =
+    formData.keyMoments || transcript || "Key moments to be highlighted.";
+  const angle = formData.analysisAngle || "defensive-collapse";
+  const tone = formData.tone || "analytical";
+  const cta =
+    formData.cta ||
+    "Which team should we break down next? Subscribe for more tactical analysis!";
+
+  const llmSection = enrichedContent
+    ? `\n\n### AI Tactical Synthesis:\n${enrichedContent}\n`
+    : "";
+
+  return `# 🎬 Content Brief: ${title}
+
+> **Brief ID:** ${briefId}
+> **Mode:** ${mode} | **Tone:** ${tone}
 
 ## The Idea
-**Core concept:** ${angle}
-**Match:** ${teams}
-**Tone:** ${tone}
+**Core concept:** ${angle} — tactical breakdown of ${teams}.
+**Unique angle:** ${title}. Focusing on key momentum swings and structural failures.
+**Why now:** Trending discussion around ${teams}.${llmSection}
 
 ---
 
-## Key Moments
-${keyMoments}
+## Audience
+**Primary viewer:** Football fan looking for clear, rapid tactical breakdown.
+**What they should feel after watching:** Informed, amazed by tactical nuances, engaged to comment.
+
+---
+
+## Hook (First 0–8 seconds)
+
+**Hook line:** "${title}: Here's what nobody is talking about."
+**Opening visual:** Fast-cut montage: stadium aerial shot → key moment graphics → tactical breakdown freeze frame.
 
 ---
 
@@ -76,9 +171,10 @@ ${keyMoments}
 
 | # | Scene Title | Duration | Voiceover / On-screen Text | Visual Direction | Notes |
 |---|-------------|----------|---------------------------|-----------------|-------|
-| 1 | Hook | 0-8s | TODO: Add hook script | Match highlights | Opening scene |
-| 2 | Analysis | 8-60s | TODO: Add analysis | Tactical graphics | Main content |
-| 3 | CTA | 60-75s | ${cta} | Channel logo | Closing |
+| 1 | Hook | 0–8s | "${title}. Let's break down exactly what happened." | Fast montage: stadium, crowd, key match moments | Hard cut to black after hook |
+| 2 | The Turning Point | 8–45s | "${moments.replace(/\n/g, " ")}" | Animated tactical diagram showing positioning | Highlight key errors & movements |
+| 3 | Tactical Shift | 45s–1:30 | "Notice the spacing in midfield during this phase. ${angle} left massive gaps." | Split screen stats & player heatmaps | Data breakdown |
+| 4 | Verdict & CTA | 1:30–2:00 | "${cta}" | Channel branding and subscribe button animation | Clean outro card |
 
 ---
 
@@ -86,110 +182,20 @@ ${keyMoments}
 
 **Title options:**
 1. ${title}
-2. TODO: Add alternative title
+2. ${teams}: The Tactical Collapse Explained
+3. Why ${teams} Lost Control of the Match
 
-**Description:** TODO: Add description
+**Description:**
+Deep dive into ${teams}. Analyzing ${moments.slice(0, 150)}.
+Sub for more tactical football breakdowns!
 
-**Tags:** ${teams}, football, soccer, match analysis
+**Tags:** ${teams
+    .split(",")
+    .map((t: string) => t.trim())
+    .join(", ")}, football analysis, tactical breakdown, soccer stats
 
 ---
 
 **Generated:** ${new Date().toISOString()}
-**Mode:** Quick Brief (no research)
 `;
-
-  return Promise.resolve(brief);
-}
-
-function generateResearchBrief(formData: any, transcript?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const topic = formData.matchTitle || formData.teams || transcript || "";
-    
-    const pythonScript = `
-import sys
-import json
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent / "src"))
-
-from pipeline.research import research_topic, synthesize_brief
-
-form_data = json.loads(sys.argv[1])
-topic = sys.argv[2]
-
-findings = research_topic(topic, mode="enrich")
-brief_md = synthesize_brief(form_data, findings, mode="enrich")
-print(brief_md)
-`;
-
-    const formDataJson = JSON.stringify(formData);
-    const python = spawn("python", ["-c", pythonScript, formDataJson, topic]);
-
-    let output = "";
-    let errorOutput = "";
-
-    python.stdout.on("data", (data) => {
-      output += data.toString();
-    });
-
-    python.stderr.on("data", (data) => {
-      errorOutput += data.toString();
-    });
-
-    python.on("close", (code) => {
-      if (code === 0 && output.trim()) {
-        resolve(output.trim());
-      } else {
-        console.error("Python research failed:", errorOutput);
-        // Fallback to quick brief if research fails
-        resolve(generateQuickBrief(formData, transcript).then(r => r));
-      }
-    });
-  });
-}
-
-function generateTopicOnlyBrief(topic: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const pythonScript = `
-import sys
-import json
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent / "src"))
-
-from pipeline.research import research_topic, synthesize_brief
-
-topic = sys.argv[1]
-
-findings = research_topic(topic, mode="full")
-form_data = {
-    "matchTitle": topic,
-    "analysisAngle": "Topic research",
-    "tone": "analytical",
-    "cta": "Subscribe for more"
-}
-brief_md = synthesize_brief(form_data, findings, mode="full")
-print(brief_md)
-`;
-
-    const python = spawn("python", ["-c", pythonScript, topic]);
-
-    let output = "";
-    let errorOutput = "";
-
-    python.stdout.on("data", (data) => {
-      output += data.toString();
-    });
-
-    python.stderr.on("data", (data) => {
-      errorOutput += data.toString();
-    });
-
-    python.on("close", (code) => {
-      if (code === 0 && output.trim()) {
-        resolve(output.trim());
-      } else {
-        console.error("Python topic research failed:", errorOutput);
-        reject(new Error("Topic-only research failed"));
-      }
-    });
-  });
 }
