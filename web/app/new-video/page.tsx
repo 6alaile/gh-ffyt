@@ -17,7 +17,7 @@ type FormData = {
   aspectRatio: "16:9" | "9:16";
 };
 
-type BriefMode = "quick" | "research" | "topic-only";
+type BriefMode = "quick" | "research" | "topic-only" | "upload";
 
 type DispatchState =
   | { step: "form" }
@@ -42,6 +42,8 @@ export default function NewVideoPage() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadMarkdown, setUploadMarkdown] = useState("");
 
   const recognitionRef = useRef<any>(null);
 
@@ -129,14 +131,31 @@ export default function NewVideoPage() {
      HANDLER: Submit form
      ================================================================ */
   async function handleSubmit() {
-    const markdown = generateMarkdown();
+    let markdown: string;
+    let submitMode = mode;
+
+    if (mode === "upload") {
+      if (uploadFile) {
+        markdown = await uploadFile.text();
+        submitMode = "upload";
+      } else if (uploadMarkdown.trim()) {
+        markdown = uploadMarkdown;
+        submitMode = "upload";
+      } else {
+        setDispatchState({ step: "error", message: "Please upload a file or paste markdown content." });
+        return;
+      }
+    } else {
+      markdown = generateMarkdown();
+    }
+
     setDispatchState({ step: "submitting", message: "Uploading brief..." });
 
     try {
       const res = await fetch("/api/brief", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown, mode }),
+        body: JSON.stringify({ markdown, mode: submitMode }),
       });
 
       if (!res.ok) throw new Error("Failed to upload brief");
@@ -222,7 +241,7 @@ export default function NewVideoPage() {
         <>
           {/* Mode Selector */}
           <div className="flex flex-wrap gap-3 mb-6">
-            {(["research", "quick", "topic-only"] as BriefMode[]).map((m) => (
+            {(["research", "quick", "topic-only", "upload"] as BriefMode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
@@ -232,11 +251,12 @@ export default function NewVideoPage() {
                     : "bg-bg border border-rule text-fg-muted hover:text-fg hover:border-accent/50"
                 }`}
               >
-                {m === "research" ? "Research" : m === "quick" ? "Quick" : "Topic Only"}
+                {m === "research" ? "Research" : m === "quick" ? "Quick" : m === "topic-only" ? "Topic Only" : "Upload Brief"}
               </button>
             ))}
 
             {/* Aspect Ratio Selector */}
+            {mode !== "upload" && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-fg-muted text-[13px]">Aspect:</span>
               <button
@@ -260,9 +280,82 @@ export default function NewVideoPage() {
                 9:16
               </button>
             </div>
+            )}
           </div>
 
-          {/* Form Fields */}
+          {/* Upload Brief Mode */}
+          {mode === "upload" ? (
+            <div className="space-y-6">
+              <div className="bg-bg rounded-xl border border-rule p-6">
+                <h3 className="text-fg font-semibold text-[15px] mb-2">Upload Brief</h3>
+                <p className="text-fg-muted text-[13px] mb-4">
+                  Upload an existing markdown brief or paste content directly.
+                </p>
+
+                <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">
+                  Upload File
+                </label>
+                <div className="flex items-center gap-4 mb-4">
+                  <label className="flex-1 flex items-center justify-center px-4 py-8 bg-bg border border-dashed border-rule rounded-lg cursor-pointer hover:border-accent/50 transition-colors">
+                    <input
+                      type="file"
+                      accept=".md,.txt,.markdown"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setUploadFile(file);
+                        if (file) setUploadMarkdown("");
+                      }}
+                    />
+                    <div className="text-center">
+                      <svg className="w-8 h-8 text-fg-muted mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+                      </svg>
+                      {uploadFile ? (
+                        <span className="text-fg text-sm font-medium">{uploadFile.name}</span>
+                      ) : (
+                        <span className="text-fg-muted text-sm">Click to upload .md or .txt</span>
+                      )}
+                    </div>
+                  </label>
+                  {uploadFile && (
+                    <button
+                      onClick={() => setUploadFile(null)}
+                      className="px-3 py-2 text-fg-muted text-sm hover:text-danger transition-colors"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-center text-fg-muted text-[12px] mb-4">— or paste content —</div>
+
+                <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">
+                  Paste Markdown
+                </label>
+                <textarea
+                  value={uploadMarkdown}
+                  onChange={(e) => {
+                    setUploadMarkdown(e.target.value);
+                    if (e.target.value.trim()) setUploadFile(null);
+                  }}
+                  placeholder="# Match Analysis&#10;&#10;Paste your markdown brief here..."
+                  rows={12}
+                  className="w-full px-4 py-2.5 bg-bg border border-rule rounded-lg text-fg placeholder-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none resize-y font-mono text-[13px]"
+                />
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={handleSubmit}
+                  className="px-6 py-2.5 bg-accent text-bg font-medium text-sm rounded-lg hover:bg-accent-hover transition-colors shadow-[0_4px_16px_rgba(255,215,0,0.3)]"
+                >
+                  Upload & Dispatch
+                </button>
+              </div>
+            </div>
+          ) : (
+          /* Form Fields */
           <div className="space-y-6">
             <div>
               <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">Match Title</label>
@@ -373,6 +466,7 @@ export default function NewVideoPage() {
               </button>
             </div>
           </div>
+          )}
         </>
       )}
 
