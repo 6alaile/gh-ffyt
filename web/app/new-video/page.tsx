@@ -256,7 +256,6 @@ export default function NewVideoPage() {
             ))}
 
             {/* Aspect Ratio Selector */}
-            {mode !== "upload" && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-fg-muted text-[13px]">Aspect:</span>
               <button
@@ -280,7 +279,6 @@ export default function NewVideoPage() {
                 9:16
               </button>
             </div>
-            )}
           </div>
 
           {/* Upload Brief Mode */}
