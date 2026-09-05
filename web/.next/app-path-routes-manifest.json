@@ -1,14 +1,15 @@
 {
-  "/_not-found/page": "/_not-found",
-  "/api/brief/route": "/api/brief",
   "/api/spec/route": "/api/spec",
   "/api/transcribe/route": "/api/transcribe",
+  "/_not-found/page": "/_not-found",
   "/api/history/route": "/api/history",
-  "/api/render/route": "/api/render",
-  "/api/upload/route": "/api/upload",
+  "/api/brief/route": "/api/brief",
   "/api/download/route": "/api/download",
+  "/api/render/route": "/api/render",
   "/api/status/route": "/api/status",
-  "/brief-form/page": "/brief-form",
+  "/api/upload/route": "/api/upload",
+  "/api/status/stream/route": "/api/status/stream",
   "/dashboard/page": "/dashboard",
-  "/page": "/"
+  "/page": "/",
+  "/brief-form/page": "/brief-form"
 }
