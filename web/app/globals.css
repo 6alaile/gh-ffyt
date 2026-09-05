@@ -81,13 +81,79 @@ body {
     @apply badge border-amber-500/50 text-amber-400 bg-amber-500/10 animate-pulse;
   }
 
+  /* Sidebar Navigation */
+  .sidebar {
+    @apply fixed inset-y-0 left-0 z-40 flex flex-col;
+    @apply w-64 bg-bg border-r border-rule;
+    @apply transition-all duration-300 ease-out-expo;
+  }
+
+  .sidebar-profile {
+    @apply flex items-center gap-4 px-6 py-8 border-b border-rule;
+  }
+
+  .sidebar-avatar-wrapper {
+    @apply relative;
+  }
+
+  .sidebar-avatar {
+    @apply w-12 h-12 rounded-full bg-[bg-elevated] border border-rule;
+    @apply flex items-center justify-center text-[fg-muted];
+  }
+
+  .sidebar-badge {
+    @apply absolute -top-1 -right-1 w-5 h-5 rounded-full bg-accent;
+    @apply flex items-center justify-center text-[10px] font-bold text-bg;
+  }
+
+  .sidebar-user-info {
+    @apply flex flex-col;
+  }
+
+  .sidebar-name {
+    @apply font-semibold text-fg;
+  }
+
+  .sidebar-email {
+    @apply text-xs text-[fg-muted];
+  }
+
+  .sidebar-nav {
+    @apply flex-1 overflow-y-auto px-3 py-6;
+  }
+
+  .sidebar-link {
+    @apply block px-4 py-3 rounded-xl text-sm font-medium;
+    @apply text-[fg-muted] transition-all duration-fast ease-out-expo;
+    @apply hover:text-fg hover:bg-[bg-elevated];
+  }
+
+  .sidebar-link-active {
+    @apply text-accent bg-[accent-soft];
+    @apply hover:text-accent hover:bg-[accent-soft];
+  }
+
+  .sidebar-content {
+    @apply flex-1 ml-64;
+    @apply min-h-screen;
+  }
+
+  @media (max-width: 768px) {
+    .sidebar {
+      @apply -translate-x-full;
+    }
+    .sidebar-content {
+      @apply ml-0;
+    }
+  }
+
   .input {
     @apply w-full bg-[bg-hover] border border-rule rounded-lg px-4 py-2.5 text-fg placeholder-[fg-muted] transition-all duration-fast;
     @apply focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none;
   }
 
   .scrollbar-thin {
-    @apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-rule/50 hover:scrollbar-thumb-accent/50;
+    @apply overflow-y-auto;
   }
 }
 

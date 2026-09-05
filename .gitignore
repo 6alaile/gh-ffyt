@@ -59,3 +59,10 @@ desktop.ini
 # Build artifacts
 *.tsbuildinfo
 .cache/
+
+# Next.js
+.next/
+out/
+
+# Screenshots
+*.png
