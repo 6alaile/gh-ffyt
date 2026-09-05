@@ -4,11 +4,11 @@
   "/_not-found/page": "/_not-found",
   "/api/history/route": "/api/history",
   "/api/brief/route": "/api/brief",
+  "/api/status/stream/route": "/api/status/stream",
   "/api/download/route": "/api/download",
-  "/api/render/route": "/api/render",
   "/api/status/route": "/api/status",
   "/api/upload/route": "/api/upload",
-  "/api/status/stream/route": "/api/status/stream",
+  "/api/render/route": "/api/render",
   "/dashboard/page": "/dashboard",
   "/page": "/",
   "/brief-form/page": "/brief-form"

@@ -1,12 +1,12 @@
 {
   "version": 1,
   "functions": {
-    "/api/history": {},
     "/api/download": {},
     "/api/brief": {},
     "/api/render": {},
+    "/api/history": {},
+    "/api/status/stream": {},
     "/api/status": {},
-    "/api/upload": {},
-    "/api/status/stream": {}
+    "/api/upload": {}
   }
 }
