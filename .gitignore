@@ -25,6 +25,7 @@ node_modules/
 # Spec-driven pipeline outputs (everything goes under build/)
 build/
 specs/_draft.json
+specs/_test_draft.json
 
 # YouTube credentials (NEVER commit)
 client_secrets.json
@@ -51,6 +52,9 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Playwright test artifacts
+.playwright-mcp/
 
 # Build artifacts
 *.tsbuildinfo

@@ -43,6 +43,7 @@ from pipeline.voiceover import (
     purge_stale_audio,
     write_audio_hash,
 )
+from pipeline.vo_check import check_voiceover_match
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -394,6 +395,14 @@ def main(argv: list[str] | None = None) -> int:
                 word_timings_by_scene[scene["id"]] = word_timings
             if audio_path.exists():
                 write_audio_hash(audio_path, scene["script"])
+                if ok and tts_cfg.vo_check_enabled:
+                    result = check_voiceover_match(scene["id"], audio_path, scene["script"])
+                    if result.flagged:
+                        print(f"  ! VO check {scene['id']}: {result.reason}")
+                        print(f"      expected:    {result.expected[:120]}")
+                        print(f"      transcribed: {(result.transcribed or '')[:120]}")
+                    else:
+                        print(f"  ok VO check  {scene['id']}: {result.reason}")
 
         if not audio_path.exists():
             print(

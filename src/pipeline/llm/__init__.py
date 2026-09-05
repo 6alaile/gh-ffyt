@@ -1,43 +1,62 @@
-"""LLM service gateway — Omniroute-ready with rule-based default fallback.
+"""LLM service gateway — Gemini-first (free tier), OpenRouter/OpenAI as
+configured upgrades, rule-based as the always-available fallback.
 
 Provides a uniform interface for the pipeline's AI-dependent stages.
-When no API key is configured, rule-based implementations execute
-so the pipeline never blocks — it merely runs with structured output.
+When no API key is configured, or when LLM generation fails validation
+twice (see llm.generate), rule-based implementations execute so the
+pipeline never blocks — it merely runs with structured output.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
+from functools import partial
 from typing import Any, Dict, List, Optional
+
+from .generate import GenerationValidationError, generate_validated
+from .providers import ProviderError, call_gemini, call_openrouter
 
 # ─────────────────────────────────────────────────────────────────────
 # Config / key detection
 # ─────────────────────────────────────────────────────────────────────
 
-OMNIROUTE_API_KEY = os.getenv("OMNIROUTE_API_KEY")
+OMNIROUTE_API_KEY = os.getenv("OMNIROUTE_API_KEY") or os.getenv("OPENROUTER_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-_PROVIDER: str = "rule-based"
-
 
 def _detect_provider() -> str:
-    global _PROVIDER
+    """Priority mirrors web/lib/llm/provider.ts's getLLMProvider(): Gemini
+    (free tier, no expiration, no credit system) first, then OpenRouter/
+    OpenAI as configured upgrades, then rule-based as the last resort.
+    """
+    if GEMINI_API_KEY:
+        return "gemini"
     if OMNIROUTE_API_KEY:
-        _PROVIDER = "openrouter"
-    elif OPENAI_API_KEY:
-        _PROVIDER = "openai"
-    elif GEMINI_API_KEY:
-        _PROVIDER = "gemini"
-    else:
-        _PROVIDER = "rule-based"
-    return _PROVIDER
+        return "openrouter"
+    if OPENAI_API_KEY:
+        return "openai"
+    return "rule-based"
 
 
 provider = _detect_provider()
 
 
+def _call_fn_for_provider() -> Optional[Any]:
+    """Returns a single-argument (prompt) -> str callable for the active
+    provider, or None if no provider is configured."""
+    if provider == "gemini":
+        return partial(call_gemini, api_key=GEMINI_API_KEY)
+    if provider == "openrouter":
+        return partial(call_openrouter, api_key=OMNIROUTE_API_KEY, use_openrouter=True)
+    if provider == "openai":
+        return partial(call_openrouter, api_key=OPENAI_API_KEY, use_openrouter=False)
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────
-# Script writer — rule-based (always available) / LLM-opt
+# Script writer — rule-based (always available) / LLM-enriched
 # ─────────────────────────────────────────────────────────────────────
 
 def script_writer(spec: Dict[str, Any], palette: Dict[str, str],
@@ -46,13 +65,68 @@ def script_writer(spec: Dict[str, Any], palette: Dict[str, str],
 
     Rule-based impl: adds a 5-part payoff/replay/CTA structure + even-
     distribution word timings + accent-detection emphasis notes.
-    LLM-driven impl has identical output shape; callers never branch.
+    LLM-enriched impl replaces the payoff/replay commentary with scene-
+    specific content (validated JSON, one repair retry); word_timings
+    stay locally computed either way — that's layout, not content.
+    Falls back to the rule-based impl on any provider/validation failure,
+    so this never blocks the pipeline.
     """
-    if provider == "rule-based":
+    call_fn = _call_fn_for_provider()
+    if call_fn is None:
         return _script_writer_rule(spec, palette, tts_cfg)
 
-    # LLM paths — same shape, different content (stubbed for now)
-    return _script_writer_rule(spec, palette, tts_cfg)
+    try:
+        return _script_writer_llm(spec, palette, tts_cfg, call_fn)
+    except (ProviderError, GenerationValidationError) as exc:
+        print(f"script_writer: LLM enrichment failed ({exc}), falling back to rule-based")
+        return _script_writer_rule(spec, palette, tts_cfg)
+
+
+def _script_writer_llm(spec: Dict[str, Any], palette: Dict[str, str],
+                       tts_cfg: Dict[str, Any], call_fn: Any) -> Dict[str, Any]:
+    enhanced = dict(spec)
+    for scene in enhanced.get("scenes", []):
+        script = scene.get("script", "")
+        duration = scene.get("duration_s", 8)
+
+        prompt = (
+            "You are a tactical football YouTube commentator. Given this scene script:\n"
+            f'"{script}"\n\n'
+            "Respond with ONLY valid JSON (no markdown fences) matching this shape:\n"
+            '{"commentary": "<2-3 sentences of scene-specific tactical commentary>", '
+            '"replay_cue": "<1 sentence directing the viewer to rewatch a specific detail>", '
+            '"emphasis_notes": ["<key phrase 1>", "<key phrase 2>"]}'
+        )
+
+        def validate(raw: str) -> Dict[str, Any]:
+            cleaned = re.sub(r"^```(?:json)?\n?|\n?```$", "", raw.strip())
+            data = json.loads(cleaned)
+            for key in ("commentary", "replay_cue", "emphasis_notes"):
+                if key not in data:
+                    raise ValueError(f"missing required field {key!r}")
+            if not isinstance(data["emphasis_notes"], list) or not data["emphasis_notes"]:
+                raise ValueError("emphasis_notes must be a non-empty list")
+            return data
+
+        result = generate_validated(call_fn, prompt, validate)
+
+        try:
+            d = float(duration)
+        except (TypeError, ValueError):
+            d = 8.0
+        n = max(1, int(d / 0.8))
+        words = script.split()
+        wt = []
+        for i, w in enumerate(words[:n]):
+            start = i * (d / max(n, 1))
+            end = min(d, start + (d / max(n, 1)))
+            wt.append({"word": w, "start": round(start, 3), "end": round(end, 3)})
+
+        scene["script"] = f"{script}\n\n{result['commentary']}\n\n{result['replay_cue']}\n\n{scene.get('cta', 'Which team should we break down next?')}"
+        scene["word_timings"] = wt
+        scene["emphasis_notes"] = result["emphasis_notes"]
+
+    return enhanced
 
 
 def _script_writer_rule(spec: Dict[str, Any], palette: Dict[str, str],
@@ -66,8 +140,6 @@ def _script_writer_rule(spec: Dict[str, Any], palette: Dict[str, str],
     - word_timings (evenly spaced across duration_s)
     - emphasis_notes (from <accent> tags or defaults)
     """
-    import re
-
     enhanced = dict(spec)
     for scene in enhanced.get("scenes", []):
         script = scene.get("script", "")

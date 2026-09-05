@@ -62,6 +62,8 @@ COMMON_SCENE_FIELDS = {
     "bottom_label": (str, False),
     "pill":         (str, False),
     "variant":      (str, False),  # e.g. "diagonal-versus" for kind=split; unknown values fall back to default layout
+    "word_timings":   (list, False),  # llm.script_writer's estimate; compose.py overwrites with real Edge TTS WordBoundary data at render time
+    "emphasis_notes": (list, False),  # llm.script_writer's <accent>-derived emphasis phrases; no renderer consumer yet
 }
 
 # Per-kind required + optional fields. Optional fields are still validated

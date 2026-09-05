@@ -612,7 +612,7 @@ def _parse_bullet_scene_block(name: str, idx: int, body: str) -> dict[str, Any]:
 
     # Headline / sub / subhead / eyebrow / name.
     # "Name" is the headline for kind=record (the big right-side word).
-    for k in ("eyebrow", "headline", "subhead", "sub", "name"):
+    for k in ("eyebrow", "headline", "subhead", "sub", "name", "body", "quote", "attribution"):
         m = re.search(rf"\*\*{k.capitalize()}:\*\*\s*(.+?)\s*$", body, re.MULTILINE)
         if not m:
             m = re.search(rf"\*\*{k.capitalize()}:?\*\*\s*(.+?)\s*$", body, re.MULTILINE)

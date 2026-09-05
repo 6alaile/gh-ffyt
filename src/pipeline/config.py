@@ -75,6 +75,7 @@ class TTSConfig:
     elevenlabs_api_key: str | None
     elevenlabs_voice_id: str | None
     allow_elevenlabs: bool
+    vo_check_enabled: bool
 
     @classmethod
     def from_env(cls) -> "TTSConfig":
@@ -85,6 +86,11 @@ class TTSConfig:
             elevenlabs_api_key=_env("ELEVENLABS_API_KEY"),
             elevenlabs_voice_id=_env("ELEVENLABS_VOICE_ID"),
             allow_elevenlabs=_env("TTS_ALLOW_ELEVENLABS") == "1",
+            # Opt-in: transcribes every freshly-generated scene's audio
+            # via faster-whisper (CPU work on top of an already
+            # CPU-bound render), so this stays off by default rather
+            # than silently adding render time to an existing pipeline.
+            vo_check_enabled=_env("VO_CHECK_ENABLED") == "1",
         )
 
 

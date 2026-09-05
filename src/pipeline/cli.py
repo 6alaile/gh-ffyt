@@ -170,7 +170,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Scenes:   {len(spec['scenes'])}")
         print(report)
 
-        # 3. Validate. Any structural problem is fatal — the user can
+        # 3. Enrich: script writer (scene commentary/word timings) and
+        # image agent (thumbnail prompt / visual overrides). Both use
+        # the configured LLM provider when available and fall back to
+        # their rule-based implementations on any failure — this step
+        # never fails the build.
+        from pipeline.llm import run_script_writer, run_image_agent
+        from pipeline.config import RenderConfig
+
+        palette = spec.get("palette") or {}
+        brand_guardrails = {
+            "background": palette.get("bg", "#0a0a0a"),
+            "accent": palette.get("accent", "#FFD700"),
+            "text": palette.get("fg", "#FFFFFF"),
+        }
+        spec = run_script_writer(spec, palette, RenderConfig.from_env(), spec.get("tts") or {})
+        spec = run_image_agent(spec, brand_guardrails)
+
+        # 4. Validate. Any structural problem is fatal — the user can
         #    hand-edit the filled spec and re-run.
         try:
             validate(spec)
@@ -179,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Validate: OK")
 
-        # 4. Write the filled spec to disk.
+        # 5. Write the filled spec to disk.
         out_dir = _Path(args.output_dir) / spec["id"]
         out_dir.mkdir(parents=True, exist_ok=True)
         spec_out = _Path(args.spec_out) if args.spec_out else (out_dir / "spec.json")
@@ -191,7 +208,32 @@ def main(argv: list[str] | None = None) -> int:
             print("\n--no-render: skipping compose.")
             return 0
 
-        # 5. Compose.
+        # 6. Generate a YouTube thumbnail if one wasn't already supplied
+        # (YT_THUMBNAIL_PATH always takes priority if already set — this
+        # only fills the gap; upload.py reads the thumbnail purely from
+        # that env var, never from the spec file). Never fails the
+        # build: the rendered video is the primary deliverable.
+        if not _os.environ.get("YT_THUMBNAIL_PATH"):
+            try:
+                from pipeline.thumbnail import build_thumbnail_prompt, thumbnail_image_url
+                from pipeline.fetchers import download_file
+                import re as _re
+
+                hook_scene = next((s for s in spec["scenes"] if s.get("kind") == "hook"), None)
+                main_text = None
+                if hook_scene and hook_scene.get("headline"):
+                    main_text = _re.sub(r"</?accent>", "", hook_scene["headline"]).strip()
+
+                prompt = build_thumbnail_prompt(spec, brand_guardrails, main_text=main_text)
+                url = thumbnail_image_url(prompt)
+                thumb_path = out_dir / "thumbnail.jpg"
+                if download_file(url, thumb_path, label="thumbnail"):
+                    _os.environ["YT_THUMBNAIL_PATH"] = str(thumb_path)
+                    print(f"Thumbnail: {thumb_path}")
+            except Exception as e:  # noqa: BLE001 - never block the build over a thumbnail
+                print(f"  ! thumbnail generation failed ({e}) — continuing without one")
+
+        # 7. Compose.
         from pipeline.compose import main as compose_main
         rc = compose_main([
             str(spec_out),
@@ -205,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         final_mp4 = out_dir / f"{spec['id']}.mp4"
         print(f"\nMP4:      {final_mp4}")
 
-        # 6. Optional upload.
+        # 8. Optional upload.
         if args.upload:
             _os.environ["VIDEO_FILE"] = str(final_mp4)
             _os.environ["YT_SPEC_PATH"] = str(spec_out)

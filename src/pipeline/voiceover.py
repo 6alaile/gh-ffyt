@@ -24,6 +24,7 @@ TTS knobs come from `TTSConfig.from_env()` (see pipeline.config).
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, TypedDict
@@ -92,6 +93,18 @@ def probe_audio_duration_seconds(path: Path) -> float | None:
 # compose.py can detect the mismatch and regenerate instead of
 # skipping.
 # ─────────────────────────────────────────────────────────────────────
+def strip_accent_tags(text: str) -> str:
+    """Remove <accent>/</accent> markup, keeping the inner text.
+
+    <accent> is a display-only convention for on-screen headline
+    emphasis (see brief.py / llm/__init__.py's emphasis-note
+    extraction). It was never stripped before reaching TTS, so Edge TTS
+    has been speaking the literal tags whenever a scene's script carried
+    them. Call this on any text headed to a TTS engine.
+    """
+    return re.sub(r"</?accent>", "", text)
+
+
 def script_hash(script: str) -> str:
     """Short, stable content hash of a scene's voiceover script."""
     return hashlib.sha256(script.encode("utf-8")).hexdigest()[:16]
@@ -165,7 +178,7 @@ def generate_with_elevenlabs(text: str, dest: Path, voice_id: str, tts: dict) ->
     r = requests.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
         headers={"xi-api-key": api_key, "Content-Type": "application/json", "Accept": "audio/mpeg"},
-        json={"text": text, "model_id": model_id, "voice_settings": settings},
+        json={"text": strip_accent_tags(text), "model_id": model_id, "voice_settings": settings},
         timeout=60,
     )
     if r.status_code != 200:
@@ -197,7 +210,7 @@ def generate_with_edge_tts(text: str, dest: Path) -> tuple[bool, list[WordTiming
 
     async def _run() -> tuple[bytes | None, list[WordTiming]]:
         communicate = edge_tts.Communicate(
-            text=text,
+            text=strip_accent_tags(text),
             voice=cfg.edge_voice,
             rate=cfg.edge_rate,
             volume=cfg.edge_volume,
