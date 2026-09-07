@@ -26,6 +26,8 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+from pipeline.config import STAGE_DIMENSIONS
+
 
 # ─────────────────────────────────────────────────────────────────────
 # 8 supported scene kinds in v1.
@@ -193,6 +195,7 @@ def validate(spec: dict[str, Any]) -> None:
     _validate_youtube(spec["youtube"])
     _validate_tts(spec.get("tts"))
     _validate_palette(spec.get("palette"))
+    _validate_aspect_ratio(spec.get("aspect_ratio"))
     _validate_scenes(spec["scenes"])
 
 
@@ -239,6 +242,18 @@ def _validate_palette(p: Any) -> None:
     for k in ("bg", "fg", "accent"):
         if k in p and not isinstance(p[k], str):
             raise SpecError(f"spec.palette.{k}: must be a CSS colour string")
+
+
+def _validate_aspect_ratio(value: Any) -> None:
+    """Optional per-brief override of RENDER_ASPECT_RATIO. Absent means
+    "use whatever the render environment defaults to" — unchanged
+    behaviour for every spec that predates this field."""
+    if value is None:
+        return
+    if value not in STAGE_DIMENSIONS:
+        raise SpecError(
+            f"spec.aspect_ratio: must be one of {', '.join(STAGE_DIMENSIONS)}, got {value!r}"
+        )
 
 
 def _validate_scenes(scenes: list[Any]) -> None:

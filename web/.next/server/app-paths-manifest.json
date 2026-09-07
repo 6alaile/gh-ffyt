@@ -1,3 +1,4 @@
 {
-  "/new-video/page": "app/new-video/page.js"
+  "/new-video/page": "app/new-video/page.js",
+  "/brief-form/page": "app/brief-form/page.js"
 }

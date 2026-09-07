@@ -144,6 +144,9 @@ export function buildMarkdownBrief({
 **Sub:** ${cta}
 **Voiceover:** "${cta}"
 
+## Format & Length
+**Aspect ratio:** ${formData.aspectRatio || "16:9"}
+
 ## YouTube Metadata
 **Title options:**
 1. ${title}: Tactical Breakdown

@@ -25,7 +25,9 @@ Documented input schema (anything not in this list is ignored):
   ## Audio Direction
     <ignored — voice/tone metadata only>
   ## Format & Length
-    **Target length:** <text>             ──► spec.total_length_hint (informational)
+    **Target length:** <text>             ──► not yet implemented (documented, no-op)
+    **Aspect ratio:** <16:9|9:16>          ──► spec.aspect_ratio (optional; falls back to
+                                              RENDER_ASPECT_RATIO env var at render time if absent)
   ## Production Notes
     <ignored>
 
@@ -143,6 +145,11 @@ def parse_brief(text: str) -> dict[str, Any]:
 
     if not spec["scenes"]:
         raise BriefParseError("no scenes found in brief (no ## Hook or ## Scene section)")
+
+    # Optional ## Format & Length: currently only aspect ratio is
+    # implemented (see docstring above re: total length).
+    if "Format & Length" in sections:
+        _fill_format(spec, sections["Format & Length"])
 
     spec.setdefault("id", _slugify(spec.get("youtube", {}).get("title", "draft")))
 
@@ -335,6 +342,19 @@ def _fill_youtube(spec: dict, body: str, top_title: str | None) -> None:
 
     yt.setdefault("privacy", "private")
     spec["youtube"] = yt
+
+
+def _fill_format(spec: dict, body: str) -> None:
+    """## Format & Length → spec.aspect_ratio.
+
+    Only fills the field when present and leaves it out otherwise —
+    schema.py's validator (and ultimately RenderConfig.from_env() at
+    render time) already do the right thing with an absent value, so
+    there's no default to guess here.
+    """
+    m = re.search(r"\*\*Aspect ratio:\*\*\s*(\S+)", body)
+    if m:
+        spec["aspect_ratio"] = m.group(1).strip()
 
 
 # ─────────────────────────────────────────────────────────────────────

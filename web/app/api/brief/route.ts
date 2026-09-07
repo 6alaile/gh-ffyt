@@ -19,6 +19,7 @@ type BriefRequest = {
     analysisAngle?: string;
     tone?: string;
     cta?: string;
+    aspectRatio?: "16:9" | "9:16";
   };
   transcript?: string;
 };
@@ -187,6 +188,9 @@ The Markdown brief MUST follow this EXACT structure with proper markdown headers
 **Sub:** Subscribe for weekly tactical breakdowns
 **Voiceover:** [10-second voiceover asking the audience for their thoughts and giving CTA]
 
+## Format & Length
+**Aspect ratio:** [16:9 or 9:16 — use exactly the value given in the request, verbatim]
+
 ## YouTube Metadata
 **Title options:**
 1. [Catchy Title 1]
@@ -208,7 +212,8 @@ Teams: ${formData.teams || "Team A vs Team B"}
 Key Moments/Observations: ${formData.keyMoments || transcript || "Detailed tactical breakdown"}
 Analysis Angle: ${formData.analysisAngle || "defensive-collapse"}
 Tone: ${formData.tone || "analytical"}
-CTA: ${formData.cta || "Subscribe for more tactical breakdowns!"}`;
+CTA: ${formData.cta || "Subscribe for more tactical breakdowns!"}
+Aspect ratio: ${formData.aspectRatio || "16:9"}`;
 
   const response = await generateValidated(
     provider,

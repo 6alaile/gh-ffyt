@@ -20,6 +20,7 @@ Reads env vars only via pipeline.config — no `os.environ.get` here.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -30,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline.captions import generate_captions_srt
-from pipeline.config import CaptionsConfig, RenderConfig, TTSConfig
+from pipeline.config import CaptionsConfig, RenderConfig, STAGE_DIMENSIONS, TTSConfig
 from pipeline.defaults import DEFAULT_PALETTE, DEFAULT_TTS, REENCODE_FFMPEG
 from pipeline.fetchers import download_file, fetch_clip
 from pipeline.renderers import render_kind
@@ -333,6 +334,13 @@ def main(argv: list[str] | None = None) -> int:
     tts = {**DEFAULT_TTS, **(spec.get("tts") or {})}
     tts_cfg = TTSConfig.from_env()
     render_cfg = RenderConfig.from_env()
+    # A brief-supplied aspect ratio wins over RENDER_ASPECT_RATIO — this
+    # is what lets a single pipeline serve both 16:9 recaps and 9:16
+    # shorts without an env-var change per run. schema.py's validate()
+    # already rejected anything not in STAGE_DIMENSIONS, so this check
+    # is just "was it set at all".
+    if spec.get("aspect_ratio") in STAGE_DIMENSIONS:
+        render_cfg = dataclasses.replace(render_cfg, aspect_ratio=spec["aspect_ratio"])
     voice_id = tts.get("voice_id") or tts_cfg.elevenlabs_voice_id
 
     print(f"Spec:    {args.spec}")

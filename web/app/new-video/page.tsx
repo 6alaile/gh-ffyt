@@ -87,115 +87,101 @@ export default function NewVideoPage() {
   }
 
   /* ================================================================
-     HANDLER: Generate markdown from form data
-     ================================================================ */
-  function generateMarkdown(): string {
-    const lines: string[] = [];
-    
-    if (mode === "research") {
-      lines.push(`# ${formData.matchTitle || "Match Analysis"}`);
-      lines.push("");
-      if (formData.teams) {
-        lines.push(`**Teams:** ${formData.teams}`);
-      }
-      lines.push("");
-      lines.push(`## Analysis Angle`);
-      lines.push(formData.analysisAngle.replace(/-/g, " ").replace(/\b\w/g, (l) => l.toUpperCase()));
-      lines.push("");
-      if (formData.keyMoments) {
-        lines.push(`## Key Moments`);
-        lines.push(formData.keyMoments);
-      }
-      lines.push("");
-      lines.push(`## Tone`);
-      lines.push(formData.tone.charAt(0).toUpperCase() + formData.tone.slice(1));
-      if (formData.cta) {
-        lines.push("");
-        lines.push(`## Call to Action`);
-        lines.push(formData.cta);
-      }
-    } else if (mode === "quick") {
-      lines.push(`# Quick Video`);
-      lines.push("");
-      lines.push(formData.matchTitle || formData.keyMoments || "Quick analysis");
-    } else {
-      lines.push(`# ${formData.matchTitle || "Video Topic"}`);
-      lines.push("");
-      lines.push(formData.keyMoments || "Topic details");
-    }
-
-    return lines.join("\n");
-  }
-
-  /* ================================================================
      HANDLER: Submit form
+     Upload mode already has finished markdown (no server generation
+     needed). Research/Quick/Topic Only hand raw form fields to
+     /api/brief, which builds the markdown server-side (optionally
+     LLM-enriched) — matching the contract /api/brief actually expects.
      ================================================================ */
   async function handleSubmit() {
-    let markdown: string;
-    let submitMode = mode;
-
     if (mode === "upload") {
+      let markdown: string;
       if (uploadFile) {
         markdown = await uploadFile.text();
-        submitMode = "upload";
       } else if (uploadMarkdown.trim()) {
         markdown = uploadMarkdown;
-        submitMode = "upload";
       } else {
         setDispatchState({ step: "error", message: "Please upload a file or paste markdown content." });
         return;
       }
-    } else {
-      markdown = generateMarkdown();
+      setDispatchState({
+        step: "review",
+        markdown,
+        briefId: `upload-${Date.now().toString(36)}`,
+      });
+      return;
     }
 
-    setDispatchState({ step: "submitting", message: "Uploading brief..." });
+    setDispatchState({ step: "submitting", message: "Generating brief..." });
 
     try {
       const res = await fetch("/api/brief", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown, mode: submitMode }),
+        body: JSON.stringify({ mode, formData, transcript }),
       });
 
-      if (!res.ok) throw new Error("Failed to upload brief");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Server error: ${res.statusText}`);
+      }
       const data = await res.json();
 
       setDispatchState({
         step: "review",
-        markdown,
+        markdown: data.markdown,
         briefId: data.briefId,
       });
     } catch (err) {
       setDispatchState({
         step: "error",
-        message: err instanceof Error ? err.message : "Failed to upload brief",
+        message: err instanceof Error ? err.message : "Failed to generate brief",
       });
     }
   }
 
   /* ================================================================
      HANDLER: Dispatch render
+     Commits the reviewed markdown to GitHub via /api/upload, then
+     dispatches the render workflow with the resulting uploadId +
+     briefPath — matching render-and-upload.yml's actual inputs.
      ================================================================ */
   async function handleDispatch() {
     if (dispatchState.step !== "review") return;
 
-    setDispatchState({ step: "submitting", message: "Dispatching render..." });
+    setDispatchState({ step: "submitting", message: "Committing brief to GitHub..." });
 
     try {
-      const res = await fetch("/api/render", {
+      const safeTitle = (formData.matchTitle || "brief").toLowerCase().replace(/[^a-z0-9]/g, "_");
+      const file = new File([dispatchState.markdown], `${safeTitle}.md`, { type: "text/markdown" });
+
+      const fd = new FormData();
+      fd.append("brief", file);
+
+      const upRes = await fetch("/api/upload", { method: "POST", body: fd });
+      if (!upRes.ok) {
+        const err = await upRes.json().catch(() => ({}));
+        throw new Error(`Upload failed: ${err.error || upRes.statusText}`);
+      }
+      const upload = await upRes.json();
+
+      setDispatchState({ step: "submitting", message: "Triggering GitHub Actions render workflow..." });
+      const renderRes = await fetch("/api/render", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ briefId: dispatchState.briefId }),
+        body: JSON.stringify({ uploadId: upload.id, briefPath: upload.path }),
       });
 
-      if (!res.ok) throw new Error("Failed to dispatch render");
-      const data = await res.json();
+      if (!renderRes.ok) {
+        const err = await renderRes.json().catch(() => ({}));
+        throw new Error(`Render dispatch failed: ${err.error || renderRes.statusText}`);
+      }
+      const renderData = await renderRes.json();
 
       setDispatchState({
         step: "dispatched",
-        uploadPath: data.uploadPath,
-        actionsUrl: data.actionsUrl,
+        uploadPath: upload.path,
+        actionsUrl: renderData.actionsUrl || "https://github.com/",
       });
     } catch (err) {
       setDispatchState({
