@@ -44,11 +44,17 @@ export default function NewVideoPage() {
   const [speechSupported, setSpeechSupported] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadMarkdown, setUploadMarkdown] = useState("");
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [recordingMethod, setRecordingMethod] = useState<"web-speech" | "media-recorder" | null>(null);
+  const [mediaRecorderSupported, setMediaRecorderSupported] = useState(false);
 
   const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   /* ================================================================
-     EFFECT: Initialize Web Speech API
+     EFFECT: Initialize Web Speech API & MediaRecorder
      ================================================================ */
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -68,21 +74,158 @@ export default function NewVideoPage() {
         };
         recognitionRef.current = recognition;
       }
+
+      // Check MediaRecorder support (fallback for Firefox/Safari)
+      if (
+        navigator.mediaDevices &&
+        "getUserMedia" in navigator.mediaDevices &&
+        "MediaRecorder" in window
+      ) {
+        setMediaRecorderSupported(true);
+      }
     }
   }, []);
 
   /* ================================================================
+     EFFECT: Recording timer
+     ================================================================ */
+  useEffect(() => {
+    if (isRecording) {
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingTime((t) => {
+          if (t >= 179) { // 180 second limit
+            mediaRecorderRef.current?.stop();
+            setIsRecording(false);
+            setDispatchState({
+              step: "error",
+              message: "Recording limit reached (3 minutes max)",
+            });
+            return 0;
+          }
+          return t + 1;
+        });
+      }, 1000);
+    } else {
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+      setRecordingTime(0);
+    }
+    return () => {
+      if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    };
+  }, [isRecording]);
+
+  /* ================================================================
      HANDLER: Toggle voice recording
      ================================================================ */
-  function toggleRecording() {
-    if (!recognitionRef.current) return;
-
-    if (isRecording) {
-      recognitionRef.current.stop();
-      setIsRecording(false);
+  async function toggleRecording() {
+    if (recordingMethod === "web-speech") {
+      if (isRecording) {
+        recognitionRef.current?.stop();
+        setIsRecording(false);
+      } else {
+        recognitionRef.current?.start();
+        setIsRecording(true);
+      }
+    } else if (recordingMethod === "media-recorder") {
+      if (isRecording) {
+        mediaRecorderRef.current?.stop();
+        setIsRecording(false);
+      } else {
+        await startMediaRecording();
+      }
     } else {
-      recognitionRef.current.start();
+      // First click: detect which method to use
+      if (speechSupported && recognitionRef.current) {
+        setRecordingMethod("web-speech");
+        recognitionRef.current.start();
+        setIsRecording(true);
+      } else if (mediaRecorderSupported) {
+        setRecordingMethod("media-recorder");
+        await startMediaRecording();
+      } else {
+        setDispatchState({
+          step: "error",
+          message: "Voice input not supported in this browser. Please type or paste content.",
+        });
+      }
+    }
+  }
+
+  /* ================================================================
+     HANDLER: Start MediaRecorder (Firefox/Safari fallback)
+     ================================================================ */
+  async function startMediaRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "audio/mp4";
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        await uploadAudioForTranscription(audioBlob);
+        stream.getTracks().forEach((track) => track.stop());
+        setRecordingMethod(null);
+      };
+
+      mediaRecorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event.error);
+        setDispatchState({
+          step: "error",
+          message: "Recording error. Please try again.",
+        });
+        stream.getTracks().forEach((track) => track.stop());
+        setRecordingMethod(null);
+      };
+
+      mediaRecorder.start();
+      mediaRecorderRef.current = mediaRecorder;
       setIsRecording(true);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.name === "NotAllowedError"
+          ? "Microphone access denied. Please check browser permissions."
+          : "Failed to start recording. Please try again.";
+      setDispatchState({ step: "error", message });
+      setRecordingMethod(null);
+    }
+  }
+
+  /* ================================================================
+     HANDLER: Upload audio for transcription (Whisper)
+     ================================================================ */
+  async function uploadAudioForTranscription(audioBlob: Blob) {
+    setDispatchState({ step: "submitting", message: "Transcribing audio..." });
+
+    try {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, "recording.webm");
+
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || "Transcription failed");
+      }
+
+      const { transcript: transcribedText } = await response.json();
+      setTranscript(transcribedText);
+      setFormData((f) => ({ ...f, keyMoments: transcribedText }));
+      setDispatchState({ step: "form" });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Transcription failed";
+      setDispatchState({ step: "error", message });
     }
   }
 
@@ -422,23 +565,64 @@ export default function NewVideoPage() {
             </div>
 
             {/* Voice Recording */}
-            {speechSupported && (
+            <div>
+              <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">
+                Voice Input (Optional)
+              </label>
               <div className="flex items-center gap-4">
                 <button
                   onClick={toggleRecording}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  disabled={!speechSupported && !mediaRecorderSupported}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
                     isRecording
                       ? "bg-danger text-white"
-                      : "bg-bg border border-rule text-fg-muted hover:text-fg"
+                      : speechSupported || mediaRecorderSupported
+                      ? "bg-bg border border-rule text-fg hover:text-accent hover:border-accent"
+                      : "bg-bg border border-rule text-fg-muted opacity-50 cursor-not-allowed"
                   }`}
                 >
-                  {isRecording ? "Stop Recording" : "Start Recording"}
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M7 4a3 3 0 016 0v6a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" />
+                  </svg>
+                  {isRecording
+                    ? `Stop Recording (${recordingTime}s / 180s)`
+                    : "Start Recording"}
                 </button>
-                {transcript && (
-                  <p className="text-fg-muted text-[13px] flex-1 truncate">{transcript}</p>
+                {!speechSupported && !mediaRecorderSupported && (
+                  <span className="text-fg-muted text-[13px]">
+                    Voice input not supported in this browser
+                  </span>
+                )}
+                {speechSupported && !isRecording && (
+                  <span className="text-fg-muted text-[13px] text-xs">
+                    Using browser speech recognition
+                  </span>
+                )}
+                {!speechSupported && mediaRecorderSupported && !isRecording && (
+                  <span className="text-fg-muted text-[13px] text-xs">
+                    Using audio upload transcription
+                  </span>
+                )}
+                {isRecording && recordingMethod === "media-recorder" && (
+                  <span className="text-danger text-[13px] text-xs">
+                    Recording will be transcribed after upload (2-5 seconds)
+                  </span>
+                )}
+                {transcript && !isRecording && (
+                  <p className="text-fg text-[13px] flex-1 truncate">
+                    <span className="text-fg-muted">Transcript:</span> {transcript}
+                  </p>
                 )}
               </div>
-            )}
+              {transcript && !isRecording && (
+                <button
+                  onClick={() => setTranscript("")}
+                  className="mt-2 px-3 py-1.5 text-xs bg-fg-muted/10 text-fg-muted rounded-lg hover:bg-fg-muted/20 transition-colors"
+                >
+                  Clear Transcript
+                </button>
+              )}
+            </div>
 
             {/* Submit Button */}
             <div className="flex justify-end">

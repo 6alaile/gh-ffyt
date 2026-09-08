@@ -4,6 +4,8 @@ import { spawn } from "child_process";
 import path from "path";
 import os from "os";
 
+export const maxDuration = 180; // 3 minutes (Vercel Hobby plan limit)
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
