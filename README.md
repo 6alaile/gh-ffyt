@@ -4,8 +4,9 @@ MD2YT is a general-purpose pipeline that turns a JSON spec into a 1920×1080 30 
 MP4 and optionally publishes it to YouTube. The first spec is the 2026
 FIFA World Cup explainer; new specs need zero code changes.
 
-The project is named **MD2YT** (Markdown → YouTube) and installs as a single
-console binary, **`md2yt`**, that drives the whole pipeline.
+The project is named **MD2YT** (Markdown → YouTube) and installs as two
+console binaries: **`md2yt`** (the pipeline) and **`md2yt-ui`** (local
+Flask dashboard).
 
 ```
 specs/<name>.json  ──►  md2yt compose
@@ -14,6 +15,7 @@ specs/<name>.json  ──►  md2yt compose
                               ├─ voiceover per scene (Edge TTS default, ElevenLabs optional)
                               ├─ render per-scene HTML (resources/base.html + per-kind CSS)
                               ├─ npx hyperframes render (per scene)
+                              ├─ captions (Whisper, optional)
                               └─ ffmpeg xfade concat
                                           │
                                           ▼
@@ -31,29 +33,39 @@ API keys and OAuth tokens live in **Settings → Secrets**; never in code.
 
 | Path | Purpose |
 |---|---|
-| `pyproject.toml` | Package metadata + console script (`md2yt = pipeline.cli:main`) + deps. |
-| `src/pipeline/` | Installable Python package. The `md2yt` binary lives here. |
-| `src/pipeline/cli.py` | Argparse subcommand dispatcher (`compose`, `validate`, `upload`, `brief`). |
+| `pyproject.toml` | Package metadata + console scripts (`md2yt`, `md2yt-ui`) + deps. |
+| `src/pipeline/` | Installable Python package. Both binaries live here. |
+| `src/pipeline/cli.py` | Argparse subcommand dispatcher (`compose`, `validate`, `upload`, `brief`, `from-brief`). |
 | `src/pipeline/schema.py` | JSON validator for specs. Loud on errors. |
-| `src/pipeline/renderers.py` | Per-kind (8 kinds) CSS + content + GSAP animations. |
+| `src/pipeline/renderers.py` | Per-kind (8 kinds) CSS + content + GSAP animations. Supports variants per kind, kinetic word-synced subtitles, and 9:16 aspect ratio overrides. |
 | `src/pipeline/fetchers.py` | Pixabay + Pexels video search. |
-| `src/pipeline/voiceover.py` | Edge TTS (default) + ElevenLabs (dormant). |
-| `src/pipeline/compose.py` | The orchestrator. Wires fetch → TTS → HTML → HyperFrames → xfade. |
+| `src/pipeline/voiceover.py` | Edge TTS (default) + ElevenLabs (dormant). Includes word-boundary timestamps, audio probing, and cache-busting. |
+| `src/pipeline/compose.py` | The orchestrator. Wires fetch → re-encode → TTS → HTML → HyperFrames → xfade. Parallel rendering via `ThreadPoolExecutor`. |
 | `src/pipeline/upload.py` | Spec-driven YouTube uploader. |
-| `src/pipeline/brief.py` | Optional: parse a `.md` content brief into a draft spec. |
+| `src/pipeline/brief.py` | Parse a `.md` content brief into a draft spec. |
+| `src/pipeline/brief_fill.py` | Auto-fill `TODO` fields in a draft spec with sensible defaults. Produces a `FillReport` audit log. |
+| `src/pipeline/captions.py` | Auto-generate YouTube `.srt` captions via Whisper. |
+| `src/pipeline/thumbnail.py` | Thumbnail prompt + image generation via Pollinations/Flux. |
+| `src/pipeline/vo_check.py` | Voiceover quality check — transcribe audio back and diff against script. |
+| `src/pipeline/transcribe.py` | Audio-to-text via Whisper. |
+| `src/pipeline/defaults.py` | Default palette, TTS settings, ffmpeg re-encode template. |
+| `src/pipeline/evidence.py` | Evidence grounding for research-backed briefs (Reddit, FBref bundles). |
 | `src/pipeline/config.py` | Env-var hub (one module owns every `os.environ` read). |
+| `src/pipeline/ui.py` | Flask dev server entry point (`md2yt-ui`). |
+| `src/pipeline/llm/` | LLM gateway — Gemini → OpenRouter → OpenAI → rule-based fallback. |
+| `src/pipeline/research/` | Research agent — scrapes Reddit, RSS, Google Trends for brief enrichment. |
+| `src/pipeline/md2yt_ui/` | Flask web UI — app factory, worker runner, log buffer. |
 | `src/pipeline/resources/base.html` | Shared HTML shell: palette, fonts, top/bottom bars, vignette. |
 | `src/pipeline/resources/fonts/*.woff2` | Bundled fonts (Anton, Manrope, JetBrains Mono, Arial Narrow). |
 | `specs/*.json` | One spec per video. JSON, validated, fully describes the video. |
+| `briefs/` | Markdown content briefs (+ pending/sha variants). |
 | `tests/` | Pytest suite — mirrors `src/pipeline/`. |
-| `docs/` | Long-form documentation (placeholder; populated as the project grows). |
+| `docs/` | Long-form documentation — roadmap, session notes, implementation guides. |
+| `web/` | Next.js 15 dashboard (Vercel-hosted) — brief editor, render dispatch, run history. |
 | `.github/workflows/render-and-upload.yml` | CI: per-spec render + optional upload. |
 
-> **Status (2026-06-18):** `md2yt` is the only entry point. The
-> `scripts/`, `templates/`, `hf/` directories and `requirements.txt` were
-> retired (parked in `tmp/`); the `src/pipeline/` package is the source
-> of truth. `pip install -e .[dev]` exposes the binary; tests live
-> under `tests/`.
+> **Version:** `0.1.0` (see `src/pipeline/__init__.py`).
+> `pip install -e .[dev]` exposes both binaries; tests live under `tests/`.
 
 ---
 
@@ -95,6 +107,13 @@ Optional: `tts` (ElevenLabs overrides), `palette` (re-skin).
 | `list` | `eyebrow`, `headline`, `items` (list of strings) | Numbered list |
 | `split` | `eyebrow`, `headline`, `body`, `image_query` | Two-column text + image |
 
+**Kind variants** (set via `"variant"` in the scene object):
+
+| Kind | Variants | Default |
+|---|---|---|
+| `hook` | `bold-impact`, `glitch-reveal`, `split-focus` | `bold-impact` |
+| `split` | `side-by-side`, `top-bottom`, `diagonal-versus` | `side-by-side` |
+
 See `specs/_example.json` for a minimal reference spec that uses every
 kind, and `specs/world_cup_2026.json` for the full reference implementation.
 
@@ -114,8 +133,8 @@ naturally:
 
 ## Install
 
-MD2YT is a regular Python package. Install it editable (so `md2yt` is
-on your `PATH` and points at your working copy):
+MD2YT is a regular Python package. Install it editable (so `md2yt` and
+`md2yt-ui` are on your `PATH` and point at your working copy):
 
 ```bash
 # Runtime deps only:
@@ -154,6 +173,16 @@ md2yt compose --spec specs/world_cup_2026.json --output-dir build
 md2yt upload --spec specs/world_cup_2026.json
 ```
 
+### Local web UI
+
+```bash
+# Start the Flask dev server on http://127.0.0.1:5000
+md2yt-ui
+```
+
+Upload a `.md` brief, track render progress, and download the finished
+MP4 from the browser.
+
 ### Turning `TTS_ALLOW_ELEVENLABS` on
 
 Edge TTS is the default and needs no key. To switch to ElevenLabs, set
@@ -187,7 +216,7 @@ unambiguously. Everything else is left as `TODO` for you to fill in.
 
 ## From markdown to video in one command
 
-`md2yt from-brief` chains the parse → auto-fill → validate → render →
+`md2yt from-brief` chains the parse → LLM enrichment → auto-fill → validate → render →
 (optional) upload pipeline so a single brief produces a finished MP4:
 
 ```bash
@@ -199,15 +228,18 @@ What happens under the hood:
 
 1. **Parse** the `.md` — recognises `## Hook`, `## Scene N — Title`,
    `## Script Outline` (markdown table), and `## YouTube Metadata`.
-2. **Auto-fill** the `TODO` fields with sensible defaults (kind from
+2. **LLM enrichment** — the script writer (Gemini → OpenRouter → OpenAI →
+   rule-based fallback) enriches scene scripts with emphasis notes and
+   word timings. The image agent generates thumbnail prompts.
+3. **Auto-fill** the `TODO` fields with sensible defaults (kind from
    heading keywords, duration_s, voiceover script, headline, eyebrow,
    stats/items/names/cards, YouTube title/description/tags/category).
    The CLI prints a `Fill report` listing every inferred value so you
    can audit before render.
-3. **Validate** the filled spec against `pipeline.schema`.
-4. **Compose** — fetch → re-encode → TTS → HTML → render → xfade,
+4. **Validate** the filled spec against `pipeline.schema`.
+5. **Compose** — fetch → re-encode → TTS → HTML → render → xfade,
    exactly like `md2yt compose`.
-5. **Upload** (only with `--upload`): `md2yt upload` against the rendered
+6. **Upload** (only with `--upload`): `md2yt upload` against the rendered
    MP4 and the filled spec. Requires YouTube secrets wired (see
    `YOUTUBE_SETUP.md`).
 
@@ -238,6 +270,9 @@ The auto-filler is best-effort. If you care about specific copy,
 The `meta` job discovers every `specs/*.json` (except `_example.json`)
 and exposes them as the dispatch dropdown options. So adding a new
 spec to the repo automatically adds it to the manual UI.
+
+When `upload_id` + `brief_path` inputs are set (from the Vercel web UI),
+the workflow runs `md2yt from-brief` on the committed brief.
 
 Render step: ~16 min for an 8-scene video. Upload: a few more. Total
 job time: 18–25 min for upload-included runs.
@@ -278,10 +313,13 @@ secret. See `YOUTUBE_SETUP.md` for the full procedure.
 ```
 specs/<id>.json
    ├─ schema.py validates
+   ├─ llm/script_writer.py enriches scripts (Gemini → OpenRouter → OpenAI → rule-based)
+   ├─ brief_fill.py auto-fills TODO fields
    ├─ fetchers.py: pixabay → pexels (fallback) → download → reencode
    ├─ voiceover.py: edge-tts (default) / elevenlabs (dormant)
    ├─ renderers.py + resources/base.html → per-scene HTML
-   ├─ npx hyperframes render (per scene)
+   ├─ npx hyperframes render (per scene, parallel)
+   ├─ captions.py: Whisper auto-generates .srt (optional)
    └─ ffmpeg xfade concat
                                           │
                                           ▼
@@ -306,18 +344,43 @@ Every environment variable is read by exactly one module —
 what they default to, read that file. If you want to add a new knob,
 add it there.
 
-The config surface is grouped into five dataclasses:
+The config surface is grouped into six dataclasses:
 
 | Dataclass | Reads |
 |---|---|
 | `FootageKeys` | `PIXABAY_API_KEY`, `PEXELS_API_KEY` |
-| `TTSConfig` | `EDGE_TTS_VOICE`, `EDGE_TTS_RATE`, `EDGE_TTS_VOLUME`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `TTS_ALLOW_ELEVENLABS` |
-| `RenderConfig` | `RENDER_PARALLEL` |
+| `TTSConfig` | `EDGE_TTS_VOICE`, `EDGE_TTS_RATE`, `EDGE_TTS_VOLUME`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `TTS_ALLOW_ELEVENLABS`, `VO_CHECK_ENABLED` |
+| `RenderConfig` | `RENDER_PARALLEL`, `RENDER_ASPECT_RATIO` |
+| `CaptionsConfig` | `CAPTIONS_ENABLED`, `WHISPER_MODEL_SIZE` |
 | `YouTubeSecrets` | `YT_CLIENT_SECRETS_BASE64`, `YT_TOKEN_PICKLE_BASE64` |
-| `YouTubeDefaults` | `YT_PRIVACY_STATUS`, `YT_THUMBNAIL_PATH`, `YT_CAPTIONS_PATH`, `YT_SPEC_PATH`, `VIDEO_FILE` |
+| `YouTubeDefaults` | `YT_SPEC_PATH`, `VIDEO_FILE`, `YT_PRIVACY_STATUS`, `YT_THUMBNAIL_PATH`, `YT_CAPTIONS_PATH` |
 
 The dataclasses are constructed with `from_env()` in their respective
 consumer modules — there is no global config object.
+
+### LLM and research env vars
+
+These are read outside `config.py`:
+
+| Env Var | Read By | Purpose |
+|---|---|---|
+| `GEMINI_API_KEY` | `llm/__init__.py` | Gemini LLM provider |
+| `OMNIROUTE_API_KEY` / `OPENROUTER_API_KEY` | `llm/__init__.py` | OpenRouter LLM provider |
+| `OPENAI_API_KEY` | `llm/__init__.py` | OpenAI LLM provider |
+| `REDDIT_CLIENT_ID` | `research/__init__.py` | Reddit API access |
+| `REDDIT_CLIENT_SECRET` | `research/__init__.py` | Reddit API access |
+
+### YouTube upload overrides
+
+These are read inline by `upload.py`:
+
+| Env Var | Purpose |
+|---|---|
+| `YT_TITLE` | Override spec title |
+| `YT_DESCRIPTION` | Override spec description |
+| `YT_TAGS` | Override spec tags |
+| `YT_CATEGORY_ID` | Override spec category |
+| `YT_PUBLISH_AT` | Scheduled publish timestamp |
 
 ---
 
