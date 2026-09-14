@@ -66,12 +66,20 @@ export default function NewVideoPage() {
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
+        recognition.lang = "en-US";
         recognition.onresult = (event: any) => {
           let finalTranscript = "";
           for (let i = 0; i < event.results.length; i++) {
             finalTranscript += event.results[i][0].transcript;
           }
           setTranscript(finalTranscript);
+        };
+        recognition.onerror = (event: any) => {
+          console.warn("Speech recognition error:", event.error);
+          setIsRecording(false);
+        };
+        recognition.onend = () => {
+          setIsRecording(false);
         };
         recognitionRef.current = recognition;
       }
@@ -418,7 +426,13 @@ export default function NewVideoPage() {
               (e.g. "focus on Arsenal's side of this") without turning
               this back into a full form. */}
           {mode === "topic-only" ? (
-            <div className="space-y-6">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSubmit();
+              }}
+              className="space-y-6"
+            >
               <div>
                 <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">
                   Video Topic
@@ -428,6 +442,7 @@ export default function NewVideoPage() {
                   value={formData.matchTitle}
                   onChange={(e) => setFormData((f) => ({ ...f, matchTitle: e.target.value }))}
                   placeholder="e.g., Arsenal's title race collapse, or Haaland's Champions League record"
+                  required
                   className="w-full px-4 py-2.5 bg-bg border border-rule rounded-lg text-fg placeholder-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none"
                 />
               </div>
@@ -451,13 +466,13 @@ export default function NewVideoPage() {
 
               <div className="flex justify-end">
                 <button
-                  onClick={handleSubmit}
+                  type="submit"
                   className="px-6 py-2.5 bg-accent text-bg font-medium text-sm rounded-lg hover:bg-accent-hover transition-colors shadow-[0_4px_16px_rgba(255,215,0,0.3)]"
                 >
                   Generate Brief
                 </button>
               </div>
-            </div>
+            </form>
           ) : mode === "upload" ? (
             <div className="space-y-6">
               <div className="bg-bg rounded-xl border border-rule p-6">
@@ -530,7 +545,13 @@ export default function NewVideoPage() {
             </div>
           ) : (
           /* Form Fields */
-          <div className="space-y-6">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSubmit();
+            }}
+            className="space-y-6"
+          >
             <div>
               <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">Match Title</label>
               <input
@@ -538,6 +559,7 @@ export default function NewVideoPage() {
                 value={formData.matchTitle}
                 onChange={(e) => setFormData((f) => ({ ...f, matchTitle: e.target.value }))}
                 placeholder="e.g., Premier League Week 15 Recap"
+                required
                 className="w-full px-4 py-2.5 bg-bg border border-rule rounded-lg text-fg placeholder-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none"
               />
             </div>
@@ -581,6 +603,7 @@ export default function NewVideoPage() {
                 onChange={(e) => setFormData((f) => ({ ...f, keyMoments: e.target.value }))}
                 placeholder="Describe the key moments or details for the video..."
                 rows={4}
+                required
                 className="w-full px-4 py-2.5 bg-bg border border-rule rounded-lg text-fg placeholder-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none resize-none"
               />
             </div>
@@ -703,13 +726,13 @@ export default function NewVideoPage() {
             {/* Submit Button */}
             <div className="flex justify-end">
               <button
-                onClick={handleSubmit}
+                type="submit"
                 className="px-6 py-2.5 bg-accent text-bg font-medium text-sm rounded-lg hover:bg-accent-hover transition-colors shadow-[0_4px_16px_rgba(255,215,0,0.3)]"
               >
                 Generate Brief
               </button>
             </div>
-          </div>
+          </form>
           )}
         </>
       )}
@@ -722,13 +745,21 @@ export default function NewVideoPage() {
         <div className="space-y-6">
           <div className="bg-bg rounded-xl border border-rule p-6">
             <h2 className="text-lg font-bold text-fg mb-4">Generated Brief</h2>
-            <pre className="text-fg-muted text-[13px] whitespace-pre-wrap font-mono">
-              {dispatchState.markdown}
-            </pre>
+            <textarea
+              value={dispatchState.markdown}
+              onChange={(e) =>
+                setDispatchState({
+                  ...dispatchState,
+                  markdown: e.target.value,
+                })
+              }
+              rows={24}
+              className="w-full px-4 py-2.5 bg-bg border border-rule rounded-lg text-fg font-mono text-[13px] whitespace-pre-wrap focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none resize-y"
+            />
           </div>
           <div className="flex justify-end gap-3">
             <button
-              onClick={handleReset}
+              onClick={() => setDispatchState({ step: "form" })}
               className="px-4 py-2 bg-bg border border-rule text-fg-muted font-medium text-sm rounded-lg hover:text-fg hover:border-accent/50 transition-colors"
             >
               Edit
@@ -775,6 +806,14 @@ export default function NewVideoPage() {
               className="px-4 py-2 bg-bg border border-rule text-fg-muted font-medium text-sm rounded-lg hover:text-fg hover:border-accent/50 transition-colors"
             >
               View History
+            </a>
+            <a
+              href={dispatchState.actionsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="px-4 py-2 bg-bg border border-rule text-fg-muted font-medium text-sm rounded-lg hover:text-fg hover:border-accent/50 transition-colors"
+            >
+              View GitHub Actions Run →
             </a>
             <button
               onClick={handleReset}
