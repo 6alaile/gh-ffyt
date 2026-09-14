@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { buildRedditBundle } from "../../../lib/research/bundles";
+import { deriveFilterTerms } from "../../../lib/research/filter-terms";
 import { buildMarkdownBrief } from "../../../lib/brief-builder";
 import { getLLMProvider } from "../../../lib/llm/provider";
 import { generateValidated } from "../../../lib/llm/generate";
@@ -22,6 +23,9 @@ type BriefRequest = {
     aspectRatio?: "16:9" | "9:16";
   };
   transcript?: string;
+  /** Opt-in for Narrate ("research") & Quick. Topic Only ignores this
+   *  value entirely and always runs research — see effectiveResearchEnabled below. */
+  researchEnabled?: boolean;
 };
 
 export async function POST(req: NextRequest) {
@@ -29,41 +33,58 @@ export async function POST(req: NextRequest) {
     const body: BriefRequest = await req.json();
     const { mode, formData, transcript } = body;
 
+    // Topic Only always runs research, no opt-out. Narrate ("research")
+    // and Quick only run it if the person explicitly turned the toggle
+    // on — it defaults off in the UI.
+    const effectiveResearchEnabled = mode === "topic-only" ? true : Boolean(body.researchEnabled);
+
     const briefId = crypto.randomBytes(4).toString("hex");
+
+    // Research runs BEFORE generation, so its findings can ground the
+    // LLM's output directly — not just backfill a template after the LLM
+    // has already written (and possibly hallucinated) something. Filter
+    // terms come from explicit Teams input when given (an intentional
+    // emphasis signal), otherwise from whatever the mode's actual form
+    // fields contain — title, key moments, or transcript — so modes
+    // without a Teams field still get a real, scoped query instead of a
+    // generic "football" search with no relevance filter applied.
+    let researchBundle: ResearchBundle | undefined;
+    if (effectiveResearchEnabled) {
+      const filterTerms = deriveFilterTerms({
+        teams: formData.teams,
+        matchTitle: formData.matchTitle,
+        keyMoments: formData.keyMoments,
+        transcript,
+      });
+      try {
+        researchBundle = await buildRedditBundle(filterTerms);
+      } catch (err) {
+        console.warn("Research bundle fetch failed, continuing without grounding data:", err);
+      }
+    }
 
     let enrichedContent = "";
     const llmProvider = getLLMProvider();
 
-    if (llmProvider && (mode === "research" || mode === "topic-only")) {
+    if (llmProvider && (mode === "research" || mode === "topic-only" || mode === "quick")) {
       try {
         enrichedContent = await callLLMEnrichment({
           provider: llmProvider,
           mode,
           formData,
           transcript,
+          researchBundle,
         });
       } catch (err) {
         console.warn("LLM enrichment failed after retry, falling back to grounded research:", err);
       }
     }
 
-    // Only fetch real research when we're about to fall back — if the LLM
-    // enrichment already produced a valid brief, we don't need it.
-    let researchBundle: ResearchBundle | undefined;
-    const needsFallback = !(
-      enrichedContent && enrichedContent.includes("## Hook") && enrichedContent.includes("## Scene")
-    );
-    if (needsFallback) {
-      const teams = (formData.teams || "")
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      try {
-        researchBundle = await buildRedditBundle(teams);
-      } catch (err) {
-        console.warn("Research bundle fetch failed, falling back with no grounded facts:", err);
-      }
-    }
+    // Fallback template path (no LLM key, or LLM output unusable, or
+    // "quick" which never calls the LLM above) already has whatever
+    // researchBundle the gate above produced — undefined if research
+    // was off for this request, which buildMarkdownBrief handles by
+    // marking claims NEEDS VERIFICATION rather than inventing facts.
 
     const briefMarkdown = buildMarkdownBrief({
       briefId,
@@ -92,11 +113,13 @@ async function callLLMEnrichment({
   mode,
   formData,
   transcript,
+  researchBundle,
 }: {
   provider: LLMProvider;
   mode: string;
   formData: any;
   transcript?: string;
+  researchBundle?: ResearchBundle;
 }): Promise<string> {
   const systemPrompt = `You are an elite YouTube football tactical analyst and video script writer for MD2YT.
 Your job is to generate a production-ready Markdown video content brief for a fast-paced 60-120 second YouTube video.
@@ -204,7 +227,24 @@ The Markdown brief MUST follow this EXACT structure with proper markdown headers
 
 **Category:** Sports
 
-Strictly output ONLY valid Markdown text following this structure. Do NOT wrap output in triple backtick markdown blocks.`;
+ Strictly output ONLY valid Markdown text following this structure. Do NOT wrap output in triple backtick markdown blocks.`;
+
+  const observations = researchBundle?.observations ?? [];
+  const groundingSection = observations.length > 0
+    ? `\n\nGrounded research — real facts fetched for this topic. Use ONLY these for any specific claim, stat, name, or quote. Ignore any item below that is not clearly about the match/topic above. If a scene needs a fact not covered here, write "NEEDS VERIFICATION" instead of inventing one:\n${observations
+        .slice(0, 8)
+        .map((o) => `- ${o.text}`)
+        .join("\n")}`
+    : `\n\nNo grounded research was found for this topic. Do not invent specific stats, quotes, or facts — use "NEEDS VERIFICATION" for anything that would require a real source.`;
+
+  // Quick gets a stricter, no-invention instruction — this mode's whole
+  // premise is "the user already told you the points, just polish the
+  // delivery," not "go research and write from scratch" like Research /
+  // Topic Only are allowed to.
+  const modeSection =
+    mode === "quick"
+      ? `\n\nMODE: QUICK. The user has already given you the core points in "Key Moments/Observations" above. Do NOT invent new facts, stats, names, or events beyond what's given there or in the grounded research below. Your job is polish only: improve pacing and flow, and write out full scene copy in the required structure using ONLY what's provided. Where a specific number or name would be needed but isn't given or grounded, use "NEEDS VERIFICATION" rather than making one up.`
+      : "";
 
   const userPrompt = `Generate a complete MD2YT brief for:
 Match/Topic: ${formData.matchTitle || formData.teams || "Match Breakdown"}
@@ -213,7 +253,7 @@ Key Moments/Observations: ${formData.keyMoments || transcript || "Detailed tacti
 Analysis Angle: ${formData.analysisAngle || "defensive-collapse"}
 Tone: ${formData.tone || "analytical"}
 CTA: ${formData.cta || "Subscribe for more tactical breakdowns!"}
-Aspect ratio: ${formData.aspectRatio || "16:9"}`;
+Aspect ratio: ${formData.aspectRatio || "16:9"}${modeSection}${groundingSection}`;
 
   const response = await generateValidated(
     provider,

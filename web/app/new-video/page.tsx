@@ -39,6 +39,7 @@ export default function NewVideoPage() {
   });
 
   const [dispatchState, setDispatchState] = useState<DispatchState>({ step: "form" });
+  const [researchEnabled, setResearchEnabled] = useState(false); // opt-in for Narrate/Quick; Topic Only ignores this and always runs research server-side
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
@@ -261,7 +262,7 @@ export default function NewVideoPage() {
       const res = await fetch("/api/brief", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, formData, transcript }),
+        body: JSON.stringify({ mode, formData, transcript, researchEnabled }),
       });
 
       if (!res.ok) {
@@ -349,6 +350,7 @@ export default function NewVideoPage() {
       aspectRatio: "16:9",
     });
     setTranscript("");
+    setResearchEnabled(false);
   }
 
   return (
@@ -380,7 +382,7 @@ export default function NewVideoPage() {
                     : "bg-bg border border-rule text-fg-muted hover:text-fg hover:border-accent/50"
                 }`}
               >
-                {m === "research" ? "Research" : m === "quick" ? "Quick" : m === "topic-only" ? "Topic Only" : "Upload Brief"}
+                {m === "research" ? "Narrate [Research]" : m === "quick" ? "Quick" : m === "topic-only" ? "Topic Only" : "Upload"}
               </button>
             ))}
 
@@ -410,8 +412,53 @@ export default function NewVideoPage() {
             </div>
           </div>
 
-          {/* Upload Brief Mode */}
-          {mode === "upload" ? (
+          {/* Topic Only Mode — single field by design: type a topic, the
+              server researches it, verifies it, and writes the script.
+              Teams stays available here as an optional emphasis field
+              (e.g. "focus on Arsenal's side of this") without turning
+              this back into a full form. */}
+          {mode === "topic-only" ? (
+            <div className="space-y-6">
+              <div>
+                <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">
+                  Video Topic
+                </label>
+                <input
+                  type="text"
+                  value={formData.matchTitle}
+                  onChange={(e) => setFormData((f) => ({ ...f, matchTitle: e.target.value }))}
+                  placeholder="e.g., Arsenal's title race collapse, or Haaland's Champions League record"
+                  className="w-full px-4 py-2.5 bg-bg border border-rule rounded-lg text-fg placeholder-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">
+                  Teams (Optional — emphasize a specific match or team)
+                </label>
+                <input
+                  type="text"
+                  value={formData.teams}
+                  onChange={(e) => setFormData((f) => ({ ...f, teams: e.target.value }))}
+                  placeholder="e.g., Arsenal vs Chelsea"
+                  className="w-full px-4 py-2.5 bg-bg border border-rule rounded-lg text-fg placeholder-fg-muted focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none"
+                />
+              </div>
+
+              <p className="text-fg-muted text-[13px]">
+                Research runs automatically for this mode — findings are fact-checked before the script is written.
+              </p>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={handleSubmit}
+                  className="px-6 py-2.5 bg-accent text-bg font-medium text-sm rounded-lg hover:bg-accent-hover transition-colors shadow-[0_4px_16px_rgba(255,215,0,0.3)]"
+                >
+                  Generate Brief
+                </button>
+              </div>
+            </div>
+          ) : mode === "upload" ? (
             <div className="space-y-6">
               <div className="bg-bg rounded-xl border border-rule p-6">
                 <h3 className="text-fg font-semibold text-[15px] mb-2">Upload Brief</h3>
@@ -564,7 +611,35 @@ export default function NewVideoPage() {
               />
             </div>
 
-            {/* Voice Recording */}
+            {/* Research Toggle — opt-in for Narrate & Quick, default off.
+                Topic Only doesn't show this; it always runs research
+                server-side with no opt-out. */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={researchEnabled}
+                onClick={() => setResearchEnabled((v) => !v)}
+                className={`relative w-11 h-6 rounded-full transition-colors ${
+                  researchEnabled ? "bg-accent" : "bg-bg border border-rule"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-fg transition-transform ${
+                    researchEnabled ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+              <div>
+                <p className="text-fg text-[14px] font-medium">Fact-check & pull sources</p>
+                <p className="text-fg-muted text-[12px]">
+                  Fetches and verifies external sources before writing the script. Off by default — turn on for topics that need grounding.
+                </p>
+              </div>
+            </div>
+
+            {/* Voice Recording — Narrate mode only */}
+            {mode === "research" && (
             <div>
               <label className="block text-fg-muted text-[12px] uppercase tracking-wider mb-2">
                 Voice Input (Optional)
@@ -623,6 +698,7 @@ export default function NewVideoPage() {
                 </button>
               )}
             </div>
+            )}
 
             {/* Submit Button */}
             <div className="flex justify-end">

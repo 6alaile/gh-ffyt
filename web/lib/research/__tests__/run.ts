@@ -12,6 +12,7 @@ import { fetchRedditThreads, fetchRssArticles } from "../reddit-bundle";
 import { fetchFbrefStats, fetchWikipediaSummary } from "../fbref-bundle";
 import { fetchTransfermarktProfile, searchTransfermarktProfileUrl } from "../transfermarkt";
 import { buildRedditBundle, buildFbrefBundle } from "../bundles";
+import { deriveFilterTerms } from "../filter-terms";
 import { bundleSnapshotId, validateClaims, EvidenceError } from "../../evidence";
 
 let passed = 0;
@@ -258,6 +259,24 @@ async function main() {
       bundle.sources.map((s) => s.id),
       bundle.snapshotId
     );
+  });
+
+  await check("deriveFilterTerms prefers explicit teams over derived words", () => {
+    assert.deepEqual(
+      deriveFilterTerms({ teams: "Arsenal, Chelsea", matchTitle: "Haaland record" }),
+      ["Arsenal", "Chelsea"]
+    );
+  });
+
+  await check("deriveFilterTerms derives from title when no teams given", () => {
+    assert.deepEqual(
+      deriveFilterTerms({ matchTitle: "Arsenal's title race collapse" }),
+      ["Arsenal", "title", "race", "collapse"]
+    );
+  });
+
+  await check("deriveFilterTerms returns [] for empty input", () => {
+    assert.deepEqual(deriveFilterTerms({}), []);
   });
 
   console.log(`\n${passed} passed`);
