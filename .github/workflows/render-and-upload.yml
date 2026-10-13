@@ -109,6 +109,17 @@ jobs:
             echo "spec_id=$SPEC_ID" >> "$GITHUB_OUTPUT"
           fi
 
+      # TEMPORARY DEBUG STEP — remove once YT secrets are confirmed.
+      # Prints only "set" / "EMPTY", never the value.
+      - name: Check YouTube secrets (temporary)
+        env:
+          YT_CLIENT_SECRETS_BASE64: ${{ secrets.YT_CLIENT_SECRETS_BASE64 }}
+          YT_TOKEN_PICKLE_BASE64:   ${{ secrets.YT_TOKEN_PICKLE_BASE64 }}
+        run: |
+          for name in YT_CLIENT_SECRETS_BASE64 YT_TOKEN_PICKLE_BASE64; do
+            if [ -n "${!name}" ]; then echo "$name: set"; else echo "$name: EMPTY"; fi
+          done
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
