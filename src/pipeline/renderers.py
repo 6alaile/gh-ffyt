@@ -185,6 +185,30 @@ def _kinetic_subtitles(scene: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def hook(scene: dict) -> tuple[str, str, str]:
+    """kind=hook. Layout is chosen by scene.get("variant"):
+
+      - unset / "bold-impact" (default, original layout): centered eyebrow/
+        headline/subhead stack, big scale-in on the headline.
+      - "glitch-reveal": headline flickers in via a quick RGB-split /
+        stutter sequence before settling — for a "something's wrong here"
+        opening beat.
+      - "split-focus": asymmetric layout — big headline on the left ~65%,
+        eyebrow + subhead stacked in a narrow right-hand sidebar behind a
+        vertical rule, rather than everything centered and stacked.
+
+    Same fallback contract as split(): an unrecognised variant string
+    degrades to "bold-impact" instead of raising, so one bad **Variant:**
+    line in a brief doesn't fail the whole render.
+    """
+    variant = scene.get("variant") or "bold-impact"
+    if variant == "glitch-reveal":
+        return _hook_glitch_reveal(scene)
+    if variant == "split-focus":
+        return _hook_split_focus(scene)
+    return _hook_bold_impact(scene)
+
+
+def _hook_bold_impact(scene: dict) -> tuple[str, str, str]:
     sid = cls(scene["id"])
     eyebrow = scene["eyebrow"]
     headline = scene["headline"]
@@ -221,6 +245,125 @@ def hook(scene: dict) -> tuple[str, str, str]:
       tl.to(".{sid}-subhead", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {2.0 * k:.3f});
       tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(2)" }}, {3.0 * k:.3f});
       // final fade out — timed to finish as the audio-anchored scene ends
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _hook_glitch_reveal(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    subhead = scene["subhead"]
+    css = f"""
+      #scene1 .scene-content {{ align-items: center; text-align: center; gap: 0; }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 24px; color: var(--accent);
+        letter-spacing: 0.4em; text-transform: uppercase;
+        margin-bottom: 24px;
+      }}
+      #scene1 .{sid}-headline {{
+        font-size: 170px; color: var(--fg);
+        text-shadow: 3px 0 var(--accent), -3px 0 #00e5ff;
+      }}
+      #scene1 .{sid}-headline .accent {{ color: var(--accent); text-shadow: none; }}
+      #scene1 .{sid}-subhead {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 28px; color: var(--muted);
+        letter-spacing: 0.1em; text-transform: uppercase;
+        margin-top: 32px;
+      }}
+    """
+    content = f"""
+      <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+      <h1 class="display headline {sid}-headline">{headline}</h1>
+      <div class="subhead {sid}-subhead">{subhead}</div>
+    """
+    k = entrance_scale(scene, 4.4)
+    # Stutter sequence: a handful of very short, alternating x-offset /
+    # opacity flickers before the headline settles at x:0, opacity:1.
+    # Kept short (≈0.35s total) so it reads as a beat, not a delay.
+    glitch_steps = [
+        (0.00, {"opacity": "0"}),
+        (0.04, {"opacity": "1", "x": "-8"}),
+        (0.08, {"opacity": "0.2", "x": "6"}),
+        (0.12, {"opacity": "1", "x": "-4"}),
+        (0.18, {"opacity": "0.3", "x": "5"}),
+        (0.24, {"opacity": "1", "x": "-2"}),
+    ]
+    glitch_js = "\n      ".join(
+        f'tl.set(".{sid}-headline", {{ {", ".join(f"{k2}: {v}" for k2, v in props.items())} }}, {(0.7 + t) * k:.3f});'
+        for t, props in glitch_steps
+    )
+    anim = f"""
+      gsap.set(".{sid}-eyebrow", {{ y: -30, opacity: 0 }});
+      gsap.set(".{sid}-headline", {{ opacity: 0, scale: 0.96 }});
+      gsap.set(".{sid}-subhead", {{ y: 20, opacity: 0 }});
+      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.4 * k:.3f}, ease: "power3.out" }}, {0.3 * k:.3f});
+      {glitch_js}
+      tl.to(".{sid}-headline", {{ x: 0, opacity: 1, scale: 1, duration: {0.35 * k:.3f}, ease: "power2.out" }}, {(0.7 + 0.30) * k:.3f});
+      tl.to(".{sid}-subhead", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {2.0 * k:.3f});
+      tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(2)" }}, {3.0 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _hook_split_focus(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    subhead = scene["subhead"]
+    css = f"""
+      #scene1 .scene-content {{
+        flex-direction: row; align-items: center; text-align: left;
+        padding: 0 120px; gap: 0;
+      }}
+      #scene1 .{sid}-main {{ flex: 0 0 62%; }}
+      #scene1 .{sid}-rule {{
+        flex: 0 0 1px; align-self: stretch; margin: 40px 60px;
+        background: var(--rule);
+      }}
+      #scene1 .{sid}-side {{
+        flex: 1; display: flex; flex-direction: column; justify-content: center;
+        gap: 28px;
+      }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px; color: var(--accent);
+        letter-spacing: 0.35em; text-transform: uppercase;
+      }}
+      #scene1 .{sid}-headline {{ font-size: 128px; color: var(--fg); line-height: 1.02; }}
+      #scene1 .{sid}-headline .accent {{ color: var(--accent); }}
+      #scene1 .{sid}-subhead {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 26px; color: var(--muted);
+        letter-spacing: 0.08em; text-transform: uppercase;
+        line-height: 1.5;
+      }}
+    """
+    content = f"""
+      <div class="{sid}-main">
+        <h1 class="display headline {sid}-headline">{headline}</h1>
+      </div>
+      <div class="{sid}-rule"></div>
+      <div class="{sid}-side">
+        <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+        <div class="subhead {sid}-subhead">{subhead}</div>
+      </div>
+    """
+    k = entrance_scale(scene, 4.4)
+    anim = f"""
+      gsap.set(".{sid}-headline", {{ x: -50, opacity: 0 }});
+      gsap.set(".{sid}-rule", {{ scaleY: 0, opacity: 0 }});
+      gsap.set(".{sid}-eyebrow", {{ x: 30, opacity: 0 }});
+      gsap.set(".{sid}-subhead", {{ x: 30, opacity: 0 }});
+      tl.to(".{sid}-headline", {{ x: 0, opacity: 1, duration: {0.8 * k:.3f}, ease: "expo.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-rule", {{ scaleY: 1, opacity: 1, duration: {0.6 * k:.3f}, ease: "power2.out" }}, {0.9 * k:.3f});
+      tl.to(".{sid}-eyebrow", {{ x: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.2 * k:.3f});
+      tl.to(".{sid}-subhead", {{ x: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.5 * k:.3f});
+      tl.to("#scene1 .bottom-bar .pill", {{ scale: 1, opacity: 1, duration: {0.4 * k:.3f}, ease: "back.out(2)" }}, {3.0 * k:.3f});
       tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
@@ -663,6 +806,28 @@ def list(scene: dict) -> tuple[str, str, str]:
 
 
 def split(scene: dict) -> tuple[str, str, str]:
+    """kind=split. Layout is chosen by scene.get("variant"):
+
+      - unset / "side-by-side" (default, original layout): text left, still-image note right.
+      - "top-bottom": text on top, image note below — reads better on 9:16 without
+        the aspect-ratio override doing all the work.
+      - "diagonal-versus": headline split across a clipped diagonal divider, for
+        head-to-head / comparison framing (e.g. Player A vs Player B copy in
+        `headline` using "X <accent>vs</accent> Y").
+
+    Unrecognised variant strings fall back to "side-by-side" rather than
+    erroring — a typo in a brief's **Variant:** field should degrade
+    gracefully, not fail rendering the whole video.
+    """
+    variant = scene.get("variant") or "side-by-side"
+    if variant == "top-bottom":
+        return _split_top_bottom(scene)
+    if variant == "diagonal-versus":
+        return _split_diagonal_versus(scene)
+    return _split_side_by_side(scene)
+
+
+def _split_side_by_side(scene: dict) -> tuple[str, str, str]:
     sid = cls(scene["id"])
     eyebrow = scene["eyebrow"]
     headline = scene["headline"]
@@ -712,6 +877,121 @@ def split(scene: dict) -> tuple[str, str, str]:
       tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {0.6 * k:.3f});
       tl.to(".{sid}-body", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.3 * k:.3f});
       tl.to(".{sid}-right", {{ scale: 1, opacity: 1, duration: {0.8 * k:.3f}, ease: "expo.out" }}, {1.0 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _split_top_bottom(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    body = scene["body"]
+    image_query = scene["image_query"]
+
+    css = f"""
+      #scene1 .scene-content {{ padding: 100px 140px; flex-direction: column; align-items: center; justify-content: center; gap: 48px; }}
+      #scene1 .{sid}-top {{ display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center; }}
+      #scene1 .{sid}-bottom {{
+        width: 100%; max-width: 900px; height: 320px;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--rule);
+      }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px; color: var(--accent);
+        letter-spacing: 0.4em; text-transform: uppercase;
+      }}
+      #scene1 .{sid}-headline {{ font-size: 110px; color: var(--fg); }}
+      #scene1 .{sid}-body {{ font-size: 32px; color: var(--fg); line-height: 1.4; max-width: 820px; }}
+      #scene1 .{sid}-image-note {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px; color: var(--muted);
+        letter-spacing: 0.1em; text-transform: uppercase;
+      }}
+    """
+    content = f"""
+      <div class="{sid}-top">
+        <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+        <h2 class="display headline {sid}-headline">{headline}</h2>
+        <p class="body {sid}-body">{body}</p>
+      </div>
+      <div class="{sid}-bottom">
+        <div class="{sid}-image-note">// STILL: {image_query}</div>
+      </div>
+    """
+    k = entrance_scale(scene, 2.8)
+    anim = f"""
+      gsap.set(".{sid}-eyebrow", {{ y: -20, opacity: 0 }});
+      gsap.set(".{sid}-headline", {{ y: 40, opacity: 0 }});
+      gsap.set(".{sid}-body", {{ y: 20, opacity: 0 }});
+      gsap.set(".{sid}-bottom", {{ y: 40, opacity: 0 }});
+      tl.to(".{sid}-eyebrow", {{ y: 0, opacity: 1, duration: {0.4 * k:.3f}, ease: "power2.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-headline", {{ y: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "expo.out" }}, {0.6 * k:.3f});
+      tl.to(".{sid}-body", {{ y: 0, opacity: 1, duration: {0.5 * k:.3f}, ease: "power2.out" }}, {1.2 * k:.3f});
+      tl.to(".{sid}-bottom", {{ y: 0, opacity: 1, duration: {0.7 * k:.3f}, ease: "expo.out" }}, {1.4 * k:.3f});
+      tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
+    """
+    return css, content, anim
+
+
+def _split_diagonal_versus(scene: dict) -> tuple[str, str, str]:
+    sid = cls(scene["id"])
+    eyebrow = scene["eyebrow"]
+    headline = scene["headline"]
+    body = scene["body"]
+    image_query = scene["image_query"]
+
+    css = f"""
+      #scene1 .scene-content {{ padding: 0; position: relative; align-items: stretch; }}
+      #scene1 .{sid}-diag {{ position: relative; width: 100%; height: 100%; display: flex; }}
+      #scene1 .{sid}-a {{
+        flex: 1; display: flex; flex-direction: column; justify-content: center;
+        padding: 0 60px 0 120px;
+        clip-path: polygon(0 0, 100% 0, 78% 100%, 0 100%);
+        background: rgba(255,255,255,0.03);
+      }}
+      #scene1 .{sid}-b {{
+        flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-end;
+        padding: 0 120px 0 60px; text-align: right;
+        margin-left: -140px;
+      }}
+      #scene1 .{sid}-eyebrow {{
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px; color: var(--accent);
+        letter-spacing: 0.35em; text-transform: uppercase;
+      }}
+      #scene1 .{sid}-headline {{ font-size: 96px; color: var(--fg); line-height: 1.05; }}
+      #scene1 .{sid}-body {{ font-size: 30px; color: var(--muted); line-height: 1.4; max-width: 480px; }}
+      #scene1 .{sid}-note {{
+        position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px; color: var(--muted);
+        letter-spacing: 0.1em; text-transform: uppercase;
+      }}
+    """
+    # headline is expected to carry the "A vs B" framing (e.g. via <accent>vs</accent>);
+    # both sides render the same headline/eyebrow/body so the visual split does the
+    # differentiating work rather than requiring two separate text sets in the brief.
+    content = f"""
+      <div class="{sid}-diag">
+        <div class="{sid}-a">
+          <div class="eyebrow {sid}-eyebrow">{eyebrow}</div>
+          <h2 class="display headline {sid}-headline">{headline}</h2>
+        </div>
+        <div class="{sid}-b">
+          <p class="body {sid}-body">{body}</p>
+        </div>
+      </div>
+      <div class="{sid}-note">// STILL: {image_query}</div>
+    """
+    k = entrance_scale(scene, 2.8)
+    anim = f"""
+      gsap.set(".{sid}-a", {{ x: -60, opacity: 0 }});
+      gsap.set(".{sid}-b", {{ x: 60, opacity: 0 }});
+      tl.to(".{sid}-a", {{ x: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "expo.out" }}, {0.3 * k:.3f});
+      tl.to(".{sid}-b", {{ x: 0, opacity: 1, duration: {0.6 * k:.3f}, ease: "expo.out" }}, {0.5 * k:.3f});
       tl.to("#scene1 .scene-content > *", {{ opacity: 0, duration: {0.4 * k:.3f} }}, {exit_fade_start(scene, k):.3f});
     """
     return css, content, anim
