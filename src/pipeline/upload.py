@@ -130,7 +130,10 @@ def build_metadata(spec: dict, defaults: YouTubeDefaults) -> dict:
 # ─────────────────────────────────────────────────────────────────────
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
-YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+YOUTUBE_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.force-ssl",  # captions + thumbnails
+]
 
 
 def get_authenticated_service(secrets: YouTubeSecrets):
