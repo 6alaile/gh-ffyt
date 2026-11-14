@@ -10,7 +10,7 @@ from pipeline.config import YouTubeDefaults
 from pipeline.schema import load_and_validate
 from unittest.mock import MagicMock
 
-from pipeline.upload import build_metadata, upload
+from pipeline.upload import build_metadata, resolve_thumbnail, upload
 
 
 def _defaults(**overrides) -> YouTubeDefaults:
@@ -113,3 +113,32 @@ def test_upload_sends_snippet_status_body(tmp_path: Path) -> None:
         "snippet": {"title": "T", "description": "D", "tags": ["a", "b"], "categoryId": "17"},
         "status": {"privacyStatus": "private", "selfDeclaredMadeForKids": False},
     }
+
+
+def test_resolve_thumbnail_prefers_env_over_spec() -> None:
+    spec = {"youtube": {"thumbnail_path": "thumbs/spec.png"}}
+    assert resolve_thumbnail(spec, _defaults(thumbnail_path="env.png")) == "env.png"
+
+
+def test_resolve_thumbnail_falls_back_to_spec() -> None:
+    spec = {"youtube": {"thumbnail_path": "thumbs/spec.png"}}
+    assert resolve_thumbnail(spec, _defaults()) == "thumbs/spec.png"
+
+
+def test_resolve_thumbnail_none_when_unset() -> None:
+    assert resolve_thumbnail({"youtube": {}}, _defaults()) is None
+
+
+def test_upload_sets_thumbnail_after_insert(tmp_path: Path) -> None:
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"\x00" * 16)
+    thumb = tmp_path / "t.png"
+    thumb.write_bytes(b"\x89PNG")
+    meta = build_metadata({"youtube": {"title": "T"}}, _defaults())
+
+    youtube = MagicMock()
+    youtube.videos.return_value.insert.return_value.next_chunk.return_value = (None, {"id": "vid1"})
+
+    upload(youtube, video, meta, thumbnail=str(thumb))
+
+    assert youtube.thumbnails.return_value.set.call_args.kwargs["videoId"] == "vid1"

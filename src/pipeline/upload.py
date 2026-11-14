@@ -90,6 +90,11 @@ def load_spec(defaults: YouTubeDefaults) -> dict:
     sys.exit(1)
 
 
+def resolve_thumbnail(spec: dict, defaults: YouTubeDefaults) -> str | None:
+    """YT_THUMBNAIL_PATH wins; otherwise fall back to spec youtube.thumbnail_path."""
+    return defaults.thumbnail_path or spec.get("youtube", {}).get("thumbnail_path") or None
+
+
 def build_metadata(spec: dict, defaults: YouTubeDefaults) -> dict:
     """Return the videos.insert request body: {"snippet": {...}, "status": {...}}."""
     yt = spec.get("youtube", {})
@@ -240,6 +245,8 @@ def upload(youtube, video_file: Path, metadata: dict, thumbnail=None, captions=N
                 media_body=MediaFileUpload(str(thumbnail)),
             ).execute()
             print(f"  Thumbnail set: {thumbnail}")
+        elif thumbnail:
+            print(f"  WARNING: thumbnail not found, skipped: {thumbnail}")
 
         if captions and Path(captions).exists():
             youtube.captions().insert(
@@ -267,10 +274,10 @@ def main() -> int:
     defaults = YouTubeDefaults.from_env()
 
     video_file = Path(defaults.video_file)
-    thumbnail = defaults.thumbnail_path
     captions = defaults.captions_path
 
     spec = load_spec(defaults)
+    thumbnail = resolve_thumbnail(spec, defaults)
     metadata = build_metadata(spec, defaults)
 
     try:
