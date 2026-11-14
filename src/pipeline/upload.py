@@ -91,34 +91,38 @@ def load_spec(defaults: YouTubeDefaults) -> dict:
 
 
 def build_metadata(spec: dict, defaults: YouTubeDefaults) -> dict:
+    """Return the videos.insert request body: {"snippet": {...}, "status": {...}}."""
     yt = spec.get("youtube", {})
-    metadata = {
+    snippet = {
         "title":       yt.get("title", "Untitled"),
         "description": yt.get("description", ""),
         "tags":        list(yt.get("tags", [])),
         "categoryId":  yt.get("category_id", "17"),
+    }
+    status = {
         "privacyStatus": yt.get("privacy", "private"),
+        "selfDeclaredMadeForKids": False,
     }
     if yt.get("publish_at"):
-        metadata["publishAt"] = yt["publish_at"]
+        status["publishAt"] = yt["publish_at"]
 
     # Env-var overrides (one-shot manual mode). Defaults carry the env
     # values in already — but a few fields (YT_TITLE, YT_DESCRIPTION,
     # YT_TAGS, YT_PUBLISH_AT, YT_CATEGORY_ID) are read inline here
     # because they're per-upload overrides not consumed elsewhere.
     if os.environ.get("YT_TITLE"):
-        metadata["title"] = os.environ["YT_TITLE"]
+        snippet["title"] = os.environ["YT_TITLE"]
     if os.environ.get("YT_DESCRIPTION"):
-        metadata["description"] = os.environ["YT_DESCRIPTION"]
+        snippet["description"] = os.environ["YT_DESCRIPTION"]
     if os.environ.get("YT_TAGS"):
-        metadata["tags"] = [t.strip() for t in os.environ["YT_TAGS"].split(",") if t.strip()]
+        snippet["tags"] = [t.strip() for t in os.environ["YT_TAGS"].split(",") if t.strip()]
     if defaults.privacy_status:
-        metadata["privacyStatus"] = defaults.privacy_status
+        status["privacyStatus"] = defaults.privacy_status
     if os.environ.get("YT_CATEGORY_ID"):
-        metadata["categoryId"] = os.environ["YT_CATEGORY_ID"]
+        snippet["categoryId"] = os.environ["YT_CATEGORY_ID"]
     if os.environ.get("YT_PUBLISH_AT"):
-        metadata["publishAt"] = os.environ["YT_PUBLISH_AT"]
-    return metadata
+        status["publishAt"] = os.environ["YT_PUBLISH_AT"]
+    return {"snippet": snippet, "status": status}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -197,9 +201,11 @@ def upload(youtube, video_file: Path, metadata: dict, thumbnail=None, captions=N
 
     if sys.stdout.isatty():
         print("Uploading:")
-        for k in ("title", "privacyStatus", "categoryId"):
-            print(f"  {k}: {metadata.get(k)}")
-        print(f"  tags: {len(metadata.get('tags', []))} item(s)")
+        snippet, status = metadata["snippet"], metadata["status"]
+        print(f"  title: {snippet.get('title')}")
+        print(f"  categoryId: {snippet.get('categoryId')}")
+        print(f"  privacyStatus: {status.get('privacyStatus')}")
+        print(f"  tags: {len(snippet.get('tags', []))} item(s)")
 
     media = MediaFileUpload(
         str(video_file),
@@ -208,10 +214,9 @@ def upload(youtube, video_file: Path, metadata: dict, thumbnail=None, captions=N
         chunksize=1024 * 1024 * 16,
     )
 
-    body = {k: v for k, v in metadata.items() if v is not None}
     insert_request = youtube.videos().insert(
-        part=",".join(body.keys()),
-        body=body,
+        part="snippet,status",
+        body=metadata,
         media_body=media,
     )
 
