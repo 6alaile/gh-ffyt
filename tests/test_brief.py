@@ -127,3 +127,46 @@ def test_parse_brief_list_items_parsed() -> None:
 def test_parse_brief_missing_file() -> None:
     with pytest.raises(FileNotFoundError):
         parse_brief_file("/no/such/brief.md")
+
+
+def test_parse_brief_description_keeps_paragraphs_and_chapters() -> None:
+    text = (
+        "# My Title\n"
+        "\n"
+        "## YouTube Metadata\n"
+        "\n"
+        "**Title options:**\n"
+        "1. The First Title\n"
+        "\n"
+        "**Description:** Para one.\n"
+        "\n"
+        "Para two.\n"
+        "\n"
+        "0:00 Intro\n"
+        "1:05 Second chapter\n"
+        "\n"
+        "**Tags:** a, b\n"
+        "\n"
+        "**Category:** Sports\n"
+        "\n"
+        "## Hook\n"
+        "\n"
+        "**Kind:** hook\n"
+        "**Duration:** 5s\n"
+        "**Headline:** H\n"
+        "> \"script line\"\n"
+    )
+    yt = parse_brief(text)["youtube"]
+    assert yt["description"] == "Para one.\n\nPara two.\n\n0:00 Intro\n1:05 Second chapter"
+    assert yt["tags"] == ["a", "b"]
+    assert yt["category_id"] == "17"
+
+
+def test_parse_brief_description_stops_at_divider() -> None:
+    text = (
+        "# T\n\n## YouTube Metadata\n\n1. A Title\n\n"
+        "**Description:** Line one.\n\n0:00 Intro\n\n---\n\nNot part of it.\n\n"
+        "## Hook\n\n**Kind:** hook\n**Duration:** 5s\n**Headline:** H\n> \"s\"\n"
+    )
+    yt = parse_brief(text)["youtube"]
+    assert yt["description"] == "Line one.\n\n0:00 Intro"

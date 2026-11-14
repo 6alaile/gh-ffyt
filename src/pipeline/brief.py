@@ -312,7 +312,13 @@ def _fill_youtube(spec: dict, body: str, top_title: str | None) -> None:
     else:
         yt["title"] = "TODO"
 
-    desc_m = re.search(r"\*\*Description:\*\*\s*(.+?)(?=\n\n|\Z)", body, re.DOTALL)
+    # Description runs across blank lines (paragraphs, chapter timestamps)
+    # until the next **Field:** line, a --- / ─── divider, or end of section.
+    desc_m = re.search(
+        r"\*\*Description:\*\*\s*(.+?)(?=\n\*\*[^*\n]+:\*\*|\n\s*(?:-{3,}|─{3,})\s*(?:\n|$)|\Z)",
+        body,
+        re.DOTALL,
+    )
     if desc_m:
         yt["description"] = desc_m.group(1).strip()
     else:
