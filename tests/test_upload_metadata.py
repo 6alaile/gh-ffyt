@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import shutil
+import subprocess
+
 import pytest
 
 from pipeline.config import YouTubeDefaults
 from pipeline.schema import load_and_validate
 from unittest.mock import MagicMock
 
-from pipeline.upload import build_metadata, resolve_thumbnail, upload
+from pipeline.upload import build_metadata, extract_thumbnail, resolve_thumbnail, upload
 
 
 def _defaults(**overrides) -> YouTubeDefaults:
@@ -142,3 +145,27 @@ def test_upload_sets_thumbnail_after_insert(tmp_path: Path) -> None:
     upload(youtube, video, meta, thumbnail=str(thumb))
 
     assert youtube.thumbnails.return_value.set.call_args.kwargs["videoId"] == "vid1"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_extract_thumbnail_makes_1280x720_jpeg(tmp_path: Path) -> None:
+    video = tmp_path / "v.mp4"
+    # Vertical 1080x1920, 3 seconds: must be letterboxed to 1280x720.
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=s=1080x1920:d=3:r=30",
+         "-pix_fmt", "yuv420p", str(video)],
+        check=True, capture_output=True,
+    )
+    out = extract_thumbnail(video, tmp_path / "t.jpg", at_s=1.0)
+    assert out is not None
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width,height", "-of", "csv=p=0", out],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert probe == "1280,720"
+    assert 0 < Path(out).stat().st_size < 2 * 1024 * 1024
+
+
+def test_extract_thumbnail_returns_none_on_failure(tmp_path: Path) -> None:
+    assert extract_thumbnail(tmp_path / "missing.mp4", tmp_path / "t.jpg") is None

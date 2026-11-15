@@ -47,6 +47,7 @@ from __future__ import annotations
 import base64
 import os
 import pickle
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -95,6 +96,32 @@ def load_spec(defaults: YouTubeDefaults) -> dict:
 def resolve_thumbnail(spec: dict, defaults: YouTubeDefaults) -> str | None:
     """YT_THUMBNAIL_PATH wins; otherwise fall back to spec youtube.thumbnail_path."""
     return defaults.thumbnail_path or spec.get("youtube", {}).get("thumbnail_path") or None
+
+
+def extract_thumbnail(video_file: Path, dest: Path, at_s: float = 2.0) -> str | None:
+    """Grab one frame from the rendered video as a 1280x720 JPEG thumbnail.
+
+    Returns the path on success, None on any failure (never fatal: the
+    video is already the deliverable). The frame is letterboxed to 16:9.
+    """
+    try:
+        r = subprocess.run(
+            [
+                "ffmpeg", "-y", "-ss", str(at_s), "-i", str(video_file),
+                "-frames:v", "1",
+                "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
+                       "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                "-q:v", "2", str(dest),
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"  ! thumbnail frame grab failed: {e}")
+        return None
+    if r.returncode != 0 or not dest.exists() or dest.stat().st_size == 0:
+        print(f"  ! thumbnail frame grab failed: {r.stderr[-300:]}")
+        return None
+    return str(dest)
 
 
 def build_metadata(spec: dict, defaults: YouTubeDefaults) -> dict:
@@ -287,6 +314,12 @@ def main() -> int:
 
     spec = load_spec(defaults)
     thumbnail = resolve_thumbnail(spec, defaults)
+    if not thumbnail and video_file.exists():
+        # No thumbnail configured: use a frame from the video itself.
+        at_s = float(os.environ.get("YT_THUMBNAIL_AT") or 2.0)
+        thumbnail = extract_thumbnail(
+            video_file, Path(tempfile.mkdtemp(prefix="yt-thumb-")) / "thumbnail.jpg", at_s
+        )
     metadata = build_metadata(spec, defaults)
 
     try:
